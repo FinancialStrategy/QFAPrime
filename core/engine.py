@@ -100,70 +100,81 @@ class ProfessionalPortfolioEngine:
         )
         self.strategies = optimizer.run_all()
 
+        if not self.strategies:
+            raise ValueError("No strategies could be constructed from the available data.")
+
         for name, result in self.strategies.items():
-            pr = self.analytics.portfolio_returns(self.data.asset_returns, result.weights)
+            try:
+                pr = self.analytics.portfolio_returns(self.data.asset_returns, result.weights)
 
-            metrics = self.analytics.calculate_all_metrics(
-                pr,
-                self.data.benchmark_returns,
-                self.config.initial_capital,
-            )
-            if not metrics:
-                continue
+                metrics = self.analytics.calculate_all_metrics(
+                    pr,
+                    self.data.benchmark_returns,
+                    self.config.initial_capital,
+                )
+                if not metrics:
+                    self.diagnostics.add_warning(f"Metrics generation failed for strategy: {name}")
+                    continue
 
-            self.metrics[name] = metrics
+                self.metrics[name] = metrics
 
-            self.risk_contributions[name] = self.analytics.risk_contribution_table(
-                result.weights,
-                self.cov,
-            )
+                self.risk_contributions[name] = self.analytics.risk_contribution_table(
+                    result.weights,
+                    self.cov,
+                )
 
-            stress_df = run_historical_stress_tests(
-                metrics["portfolio_returns"],
-                metrics["benchmark_returns"],
-            )
-            self.historical_stress[name] = stress_df
+                stress_df = run_historical_stress_tests(
+                    metrics["portfolio_returns"],
+                    metrics["benchmark_returns"],
+                )
+                self.historical_stress[name] = stress_df
 
-            path_map: Dict[str, pd.DataFrame] = {}
-            if stress_df is not None and not stress_df.empty:
-                for _, row in stress_df.iterrows():
-                    path_map[row["scenario"]] = extract_scenario_path(
-                        metrics["portfolio_returns"],
-                        metrics["benchmark_returns"],
-                        row["start_date"],
-                        row["end_date"],
-                    )
-            self.historical_stress_paths[name] = path_map
+                path_map: Dict[str, pd.DataFrame] = {}
+                if stress_df is not None and not stress_df.empty:
+                    for _, row in stress_df.iterrows():
+                        path_map[row["scenario"]] = extract_scenario_path(
+                            metrics["portfolio_returns"],
+                            metrics["benchmark_returns"],
+                            row["start_date"],
+                            row["end_date"],
+                        )
+                self.historical_stress_paths[name] = path_map
 
-            self.hypothetical_shocks[name] = run_hypothetical_shocks(result.weights)
+                self.hypothetical_shocks[name] = run_hypothetical_shocks(result.weights)
 
-            self.sharp_fluctuation_windows[name] = detect_sharp_fluctuation_windows(
-                metrics["portfolio_returns"],
-                window=21,
-                top_n=5,
-            )
+                self.sharp_fluctuation_windows[name] = detect_sharp_fluctuation_windows(
+                    metrics["portfolio_returns"],
+                    window=21,
+                    top_n=5,
+                )
 
-            self.monte_carlo_results[name] = self.monte_carlo.simulate_terminal_values(
-                metrics["portfolio_returns"],
-                initial_capital=self.config.initial_capital,
-                horizon_days=self.config.annual_trading_days,
-                n_sims=1000,
-                random_seed=42,
-            )
+                self.monte_carlo_results[name] = self.monte_carlo.simulate_terminal_values(
+                    metrics["portfolio_returns"],
+                    initial_capital=self.config.initial_capital,
+                    horizon_days=self.config.annual_trading_days,
+                    n_sims=1000,
+                    random_seed=42,
+                )
 
-            if result.method == "black_litterman":
-                prior = result.diagnostics.get("prior_returns")
-                posterior = result.diagnostics.get("posterior_returns")
-                bl_w = result.diagnostics.get("bl_weight_output")
+                if result.method == "black_litterman":
+                    prior = result.diagnostics.get("prior_returns")
+                    posterior = result.diagnostics.get("posterior_returns")
+                    bl_w = result.diagnostics.get("bl_weight_output")
 
-                if prior is not None:
-                    self.bl_prior_returns = pd.Series(prior)
+                    if prior is not None:
+                        self.bl_prior_returns = pd.Series(prior)
 
-                if posterior is not None:
-                    self.bl_posterior_returns = pd.Series(posterior)
+                    if posterior is not None:
+                        self.bl_posterior_returns = pd.Series(posterior)
 
-                if bl_w is not None:
-                    self.bl_weights = bl_w
+                    if bl_w is not None:
+                        self.bl_weights = bl_w
+
+            except Exception as exc:
+                self.diagnostics.add_warning(f"Strategy {name} failed during analytics stage: {exc}")
+
+        if not self.metrics:
+            raise ValueError("All strategies failed.")
 
         if self.bl_posterior_returns is not None and self.cov is not None:
             self.bl_posterior_cov = self.cov.copy()
@@ -173,13 +184,10 @@ class ProfessionalPortfolioEngine:
             n_components=5,
         )
 
-        if self.metrics:
-            self.metrics_df = pd.DataFrame(self.metrics).T.sort_values(
-                "sharpe_ratio",
-                ascending=False,
-            )
-        else:
-            self.metrics_df = pd.DataFrame()
+        self.metrics_df = pd.DataFrame(self.metrics).T.sort_values(
+            "sharpe_ratio",
+            ascending=False,
+        )
 
         strategy_rows = []
         for name, result in self.strategies.items():
