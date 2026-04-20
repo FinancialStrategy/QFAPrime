@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (ÜST ÇİZGİ pseudo-element ile KESİN ÇÖZÜM)
+# STYLING (ÜST ÇİZGİ border-top ile KESİN ÇÖZÜM)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -60,22 +60,12 @@ CUSTOM_CSS = """
         width: 100%;
         background: #ffffff;
         border: 1px solid #e5e7eb;
+        border-top: 4px solid #2E86AB;   /* KESİN ÇÖZÜM: border-top ile üst çizgi */
+        border-top-left-radius: 16px;
+        border-top-right-radius: 16px;
         border-radius: 16px;
         padding: 80px 24px 40px 24px;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
-        overflow: visible;
-    }
-
-    /* KESİN ÇÖZÜM: ÜST ÇİZGİ (pseudo-element) */
-    .hero-shell::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
-        background: #2E86AB;   /* İstediğiniz renk */
-        border-radius: 16px 16px 0 0;
     }
 
     .hero-title {
