@@ -55,52 +55,107 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
+    /* DAHA DERİN KART */
     .hero-shell {
         width: 100%;
         background: #ffffff;
         border: 1px solid #dbe3ec;
-        border-radius: 12px;
-        padding: 14px 18px 12px 18px;
-        box-shadow: 0 1px 8px rgba(15, 23, 42, 0.05);
+        border-radius: 16px;
+        padding: 22px 24px 20px 24px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
     }
 
-    /* BÜYÜTÜLMÜŞ BAŞLIK */
+    /* KÜÇÜLTÜLMÜŞ BAŞLIK */
     .hero-title {
         display: block;
         width: 100%;
-        font-size: 1.8rem !important;
-        font-weight: 800;
-        line-height: 1.28;
+        font-size: 1.4rem !important;
+        font-weight: 700;
+        line-height: 1.3;
         color: #0f172a;
         text-align: left;
         margin: 0;
         padding: 0;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-        word-break: normal;
-        overflow-wrap: anywhere;
         letter-spacing: -0.01em;
     }
 
-    /* BÜYÜTÜLMÜŞ ALT BAŞLIK */
+    /* KÜÇÜLTÜLMÜŞ ALT BAŞLIK */
     .hero-subtitle {
         display: block;
         width: 100%;
-        font-size: 1.1rem !important;
+        font-size: 0.9rem !important;
         font-weight: 500;
-        line-height: 1.38;
+        line-height: 1.4;
         color: #475569;
         text-align: left;
-        margin-top: 0.4rem;
+        margin-top: 0.5rem;
         padding: 0;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-        word-break: normal;
-        overflow-wrap: anywhere;
     }
+
+    .kpi-card {
+        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        padding: 12px 12px 10px 12px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+        min-height: 94px;
+    }
+
+    .kpi-title {
+        font-size: 0.68rem;
+        color: #cbd5e1;
+        margin-bottom: 6px;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+
+    .kpi-value {
+        font-size: 1.06rem;
+        color: white;
+        font-weight: 800;
+        line-height: 1.1;
+    }
+
+    .kpi-sub {
+        font-size: 0.68rem;
+        color: #94a3b8;
+        margin-top: 5px;
+        line-height: 1.2;
+    }
+
+    .section-label {
+        font-size: 0.90rem;
+        font-weight: 800;
+        color: #0f172a;
+        margin: 0.25rem 0 0.6rem 0;
+    }
+
+    .small-note {
+        color: #64748b;
+        font-size: 0.72rem;
+    }
+
+    /* MOBİL UYUM */
+    @media (max-width: 1100px) {
+        .block-container {
+            padding-left: 1.2rem !important;
+            padding-right: 1.2rem !important;
+        }
+
+        .hero-shell {
+            padding: 18px 20px 16px 20px;
+        }
+
+        .hero-title {
+            font-size: 1.2rem !important;
+        }
+
+        .hero-subtitle {
+            font-size: 0.8rem !important;
+        }
+    }
+</style>
 
     .kpi-card {
         background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
