@@ -12,13 +12,24 @@ from core.expected_returns import ExpectedReturnBuilder
 from core.monte_carlo import MonteCarloEngine
 from core.optimizers import ProfessionalOptimizer, StrategyResult
 from core.risk_models import RiskModelBuilder
-from core.scenarios import run_historical_stress_tests, run_hypothetical_shocks
+from core.scenarios import (
+    extract_scenario_path,
+    run_historical_stress_tests,
+    run_hypothetical_shocks,
+    detect_sharp_fluctuation_windows,
+    DEFAULT_HISTORICAL_SCENARIOS,
+)
 from core.universes import flatten_universe_dict, get_universe_definition
 
 
 class ProfessionalPortfolioEngine:
-    def __init__(self, config: Optional[ProfessionalConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ProfessionalConfig] = None,
+        bl_controls: Optional[Dict] = None,
+    ):
         self.config = config or ProfessionalConfig()
+        self.bl_controls = bl_controls or {"enabled": False, "view_mode": "ticker", "views_payload": []}
         self.diagnostics = RunDiagnostics()
 
         self.data = ProfessionalDataManager(self.config, self.diagnostics)
@@ -37,8 +48,17 @@ class ProfessionalPortfolioEngine:
         self.strategy_df = pd.DataFrame()
         self.risk_contributions: Dict[str, pd.DataFrame] = {}
         self.historical_stress: Dict[str, pd.DataFrame] = {}
+        self.historical_stress_paths: Dict[str, Dict[str, pd.DataFrame]] = {}
         self.hypothetical_shocks: Dict[str, pd.DataFrame] = {}
+        self.sharp_fluctuation_windows: Dict[str, pd.DataFrame] = {}
         self.monte_carlo_results: Dict[str, Dict] = {}
+
+        self.bl_prior_returns: pd.Series | None = None
+        self.bl_posterior_returns: pd.Series | None = None
+        self.bl_posterior_cov: pd.DataFrame | None = None
+        self.bl_weights: Dict[str, float] | None = None
+
+        self.pca_results: Dict = {}
 
     def run(self, current_weights: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         self.data.load()
@@ -65,7 +85,9 @@ class ProfessionalPortfolioEngine:
             config=self.config,
             diagnostics=self.diagnostics,
             asset_categories=asset_categories,
+            asset_metadata=self.data.asset_metadata,
             current_weights=current_weights,
+            bl_controls=self.bl_controls,
         )
         self.strategies = optimizer.run_all()
 
@@ -83,12 +105,30 @@ class ProfessionalPortfolioEngine:
                 self.cov,
             )
 
-            self.historical_stress[name] = run_historical_stress_tests(
+            stress_df = run_historical_stress_tests(
                 metrics["portfolio_returns"],
                 metrics["benchmark_returns"],
             )
+            self.historical_stress[name] = stress_df
+
+            path_map: Dict[str, pd.DataFrame] = {}
+            if not stress_df.empty:
+                for _, row in stress_df.iterrows():
+                    path_map[row["scenario"]] = extract_scenario_path(
+                        metrics["portfolio_returns"],
+                        metrics["benchmark_returns"],
+                        row["start_date"],
+                        row["end_date"],
+                    )
+            self.historical_stress_paths[name] = path_map
 
             self.hypothetical_shocks[name] = run_hypothetical_shocks(result.weights)
+
+            self.sharp_fluctuation_windows[name] = detect_sharp_fluctuation_windows(
+                metrics["portfolio_returns"],
+                window=21,
+                top_n=5,
+            )
 
             self.monte_carlo_results[name] = self.monte_carlo.simulate_terminal_values(
                 metrics["portfolio_returns"],
@@ -97,6 +137,26 @@ class ProfessionalPortfolioEngine:
                 n_sims=1000,
                 random_seed=42,
             )
+
+            if result.method == "black_litterman":
+                prior = result.diagnostics.get("prior_returns")
+                posterior = result.diagnostics.get("posterior_returns")
+                bl_w = result.diagnostics.get("bl_weight_output")
+                if prior:
+                    self.bl_prior_returns = pd.Series(prior)
+                if posterior:
+                    self.bl_posterior_returns = pd.Series(posterior)
+                if bl_w:
+                    self.bl_weights = bl_w
+
+        if self.bl_posterior_returns is not None and self.cov is not None:
+            # pragmatic placeholder: posterior covariance structure can be reused from diagnostics if needed later
+            self.bl_posterior_cov = self.cov.copy()
+
+        self.pca_results = self.analytics.pca_factor_analysis(
+            self.data.asset_returns,
+            n_components=5,
+        )
 
         self.metrics_df = pd.DataFrame(self.metrics).T.sort_values("sharpe_ratio", ascending=False)
         self.strategy_df = pd.DataFrame([
