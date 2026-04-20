@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any, Dict
 
 
 INSTITUTIONAL_MULTI_ASSET_UNIVERSE: Dict[str, Dict[str, str]] = {
@@ -83,4 +83,83 @@ GLOBAL_MAJOR_INDICES_30: Dict[str, Dict[str, str]] = {
         "MSCI Frontier Markets Proxy": "FM",
         "MSCI Turkey Proxy": "TUR",
         "South Africa Proxy": "EZA",
-    return rows
+    },
+}
+
+
+UNIVERSE_REGISTRY: Dict[str, Dict[str, Dict[str, str]]] = {
+    "institutional_multi_asset": INSTITUTIONAL_MULTI_ASSET_UNIVERSE,
+    "global_major_indices_30": GLOBAL_MAJOR_INDICES_30,
+    "global_multi_asset": INSTITUTIONAL_MULTI_ASSET_UNIVERSE,
+    "major_indices": GLOBAL_MAJOR_INDICES_30,
+}
+
+
+def _infer_asset_class(top_level_bucket: str, display_name: str, ticker: str) -> str:
+    bucket = top_level_bucket.lower()
+
+    if "fixed_income" in bucket:
+        return "Fixed Income"
+    if "real_assets" in bucket:
+        return "Real Assets"
+    if "sector" in bucket:
+        return "Sectors"
+    if "equities" in bucket:
+        return "Equities"
+    if "north_america" in bucket or "europe" in bucket or "asia_pacific" in bucket or "emerging_markets" in bucket:
+        return "Equity Indices"
+
+    if ticker.endswith("=X"):
+        return "FX"
+    if ticker.endswith("-USD"):
+        return "Crypto"
+
+    return "Other"
+
+
+def _infer_region(top_level_bucket: str) -> str:
+    mapping = {
+        "US_Equities": "US",
+        "International_Equities": "International",
+        "Fixed_Income": "US",
+        "Real_Assets": "Global",
+        "Sectors": "US",
+        "North_America": "North America",
+        "Europe": "Europe",
+        "Asia_Pacific": "Asia Pacific",
+        "Emerging_Markets": "Emerging Markets",
+    }
+    return mapping.get(top_level_bucket, "Unknown")
+
+
+def get_universe_definition(selected_universe: str) -> Dict[str, Dict[str, str]]:
+    return UNIVERSE_REGISTRY.get(
+        selected_universe,
+        INSTITUTIONAL_MULTI_ASSET_UNIVERSE,
+    )
+
+
+def flatten_universe_dict(universe_definition: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
+    flat: Dict[str, Dict[str, Any]] = {}
+
+    for bucket_name, instruments in universe_definition.items():
+        if not isinstance(instruments, dict):
+            continue
+
+        for display_name, ticker in instruments.items():
+            ticker_str = str(ticker).strip()
+            display_name_str = str(display_name).strip()
+
+            if not ticker_str:
+                continue
+
+            flat[ticker_str] = {
+                "ticker": ticker_str,
+                "name": display_name_str,
+                "bucket": bucket_name,
+                "asset_class": _infer_asset_class(bucket_name, display_name_str, ticker_str),
+                "region_type": _infer_region(bucket_name),
+                "category": bucket_name,
+            }
+
+    return flat
