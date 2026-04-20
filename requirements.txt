@@ -9,3 +9,4 @@ statsmodels
 cvxpy
 ecos
 osqp
+scikit-learn
