@@ -1,6 +1,6 @@
-import time
 import random
-from typing import Iterable, List, Tuple, Dict, Optional
+import time
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -10,12 +10,11 @@ import yfinance as yf
 def _normalize_close_frame(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalize yfinance output to a clean close-price DataFrame.
-    Works for both single-ticker and multi-ticker downloads.
+    Supports both single-ticker and multi-ticker downloads.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # MultiIndex columns case
     if isinstance(df.columns, pd.MultiIndex):
         level0 = [str(c[0]).lower() for c in df.columns]
         if "adj close" in level0:
@@ -25,7 +24,6 @@ def _normalize_close_frame(df: pd.DataFrame) -> pd.DataFrame:
         else:
             return pd.DataFrame()
     else:
-        # Single ticker case
         cols_lower = {str(c).lower(): c for c in df.columns}
         if "adj close" in cols_lower:
             out = df[[cols_lower["adj close"]]].copy()
@@ -52,7 +50,7 @@ def _single_ticker_download(
     end: str,
     auto_adjust: bool = False,
     timeout: int = 30,
-    max_retries: int = 3,
+    max_retries: int = 4,
     pause_seconds: float = 2.0,
 ) -> pd.DataFrame:
     """
@@ -77,10 +75,13 @@ def _single_ticker_download(
                     px.columns = [ticker]
                 return px
 
-        except Exception as e:
-            print(f"[single_ticker_download] {ticker} attempt={attempt+1} error={e}")
+        except Exception as exc:
+            print(
+                f"[single_ticker_download] ticker={ticker} "
+                f"attempt={attempt + 1}/{max_retries} error={exc}"
+            )
 
-        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.25, 0.9)
+        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.5, 1.25)
         time.sleep(sleep_time)
 
     return pd.DataFrame()
@@ -92,12 +93,11 @@ def _batch_download(
     end: str,
     auto_adjust: bool = False,
     timeout: int = 30,
-    max_retries: int = 2,
+    max_retries: int = 3,
     pause_seconds: float = 2.0,
 ) -> pd.DataFrame:
     """
-    Download a batch of tickers with retry/backoff.
-    Returns a multi-column close-price DataFrame.
+    Download a small batch of tickers with retry/backoff.
     """
     joined = " ".join(tickers)
 
@@ -109,23 +109,25 @@ def _batch_download(
                 end=end,
                 progress=False,
                 auto_adjust=auto_adjust,
-                threads=False,   # VERY IMPORTANT for Render/Yahoo throttling
+                threads=False,
                 group_by="column",
                 timeout=timeout,
             )
 
             px = _normalize_close_frame(raw)
             if not px.empty:
-                # Ensure expected columns exist as much as possible
                 existing = [c for c in tickers if c in px.columns]
                 if existing:
                     return px[existing].copy()
                 return px
 
-        except Exception as e:
-            print(f"[batch_download] tickers={tickers} attempt={attempt+1} error={e}")
+        except Exception as exc:
+            print(
+                f"[batch_download] tickers={tickers} "
+                f"attempt={attempt + 1}/{max_retries} error={exc}"
+            )
 
-        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.25, 0.9)
+        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.5, 1.25)
         time.sleep(sleep_time)
 
     return pd.DataFrame()
@@ -137,11 +139,11 @@ def load_price_data(
     start: str,
     end: str,
     auto_adjust: bool = False,
-    batch_size: int = 4,
+    batch_size: int = 3,
     min_non_na_ratio: float = 0.70,
 ) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
     """
-    Robust Yahoo Finance loader for Streamlit/Render deployments.
+    Robust Yahoo Finance loader for Render/Streamlit deployments.
 
     Returns:
         prices: cleaned close-price DataFrame
@@ -152,15 +154,15 @@ def load_price_data(
         }
     """
     tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
-    tickers = list(dict.fromkeys(tickers))  # de-duplicate while preserving order
+    tickers = list(dict.fromkeys(tickers))
 
     if not tickers:
         return pd.DataFrame(), {"requested": [], "downloaded": [], "failed": []}
 
-    all_frames = []
+    all_frames: List[pd.DataFrame] = []
     downloaded = set()
 
-    # Step 1: small batches to reduce throttling
+    # Step 1: small-batch download
     for chunk in _chunk_list(tickers, batch_size):
         df_chunk = _batch_download(
             tickers=chunk,
@@ -175,8 +177,7 @@ def load_price_data(
                 all_frames.append(df_chunk[available_cols].copy())
                 downloaded.update(available_cols)
 
-        # polite pause between batches
-        time.sleep(random.uniform(1.0, 2.0))
+        time.sleep(random.uniform(1.0, 2.2))
 
     # Step 2: fallback one-by-one for missed tickers
     missing = [t for t in tickers if t not in downloaded]
@@ -191,7 +192,7 @@ def load_price_data(
             all_frames.append(df_one)
             downloaded.add(ticker)
 
-        time.sleep(random.uniform(1.0, 2.0))
+        time.sleep(random.uniform(1.0, 2.2))
 
     if not all_frames:
         return pd.DataFrame(), {
@@ -201,19 +202,14 @@ def load_price_data(
         }
 
     prices = pd.concat(all_frames, axis=1)
-
-    # Remove duplicate columns if any
     prices = prices.loc[:, ~prices.columns.duplicated(keep="last")]
 
-    # Reorder columns according to request
     final_cols = [t for t in tickers if t in prices.columns]
     prices = prices[final_cols].copy()
 
-    # Basic cleaning
     prices = prices.sort_index()
     prices = prices[~prices.index.duplicated(keep="last")]
 
-    # Keep only columns with enough observations
     valid_cols = []
     for col in prices.columns:
         ratio = prices[col].notna().mean()
@@ -221,14 +217,9 @@ def load_price_data(
             valid_cols.append(col)
 
     prices = prices[valid_cols].copy()
-
-    # Limited forward fill for small gaps
     prices = prices.ffill(limit=3)
-
-    # Drop rows that are completely NaN
     prices = prices.dropna(how="all")
 
-    # Final failed list
     downloaded_final = list(prices.columns)
     failed = [t for t in tickers if t not in downloaded_final]
 
@@ -243,5 +234,8 @@ def load_price_data(
 def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
     if prices is None or prices.empty:
         return pd.DataFrame()
-    returns = prices.pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna(how="all")
+
+    returns = prices.pct_change()
+    returns = returns.replace([float("inf"), float("-inf")], pd.NA)
+    returns = returns.dropna(how="all")
     return returns
