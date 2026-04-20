@@ -16,12 +16,21 @@ class AnalyticsEngine:
         self.config = config
 
     def portfolio_returns(self, returns: pd.DataFrame, weights: Dict[str, float]) -> pd.Series:
-        w = pd.Series(weights).reindex(returns.columns).fillna(0.0)
-        w = w / w.sum()
+        if returns is None or returns.empty:
+            return pd.Series(dtype=float)
+
+        w = pd.Series(weights, dtype=float).reindex(returns.columns).fillna(0.0)
+        weight_sum = float(w.sum())
+        if np.isclose(weight_sum, 0.0):
+            return pd.Series(0.0, index=returns.index, name="portfolio_returns")
+
+        w = w / weight_sum
         return returns.mul(w, axis=1).sum(axis=1)
 
     def portfolio_values(self, returns: pd.Series, initial_capital: float) -> pd.Series:
-        return (1 + returns).cumprod() * initial_capital
+        if returns is None or returns.empty:
+            return pd.Series(dtype=float)
+        return (1 + returns.fillna(0.0)).cumprod() * initial_capital
 
     def calculate_var_family(
         self,
@@ -29,6 +38,9 @@ class AnalyticsEngine:
         benchmark_returns: pd.Series,
     ) -> Dict[str, float]:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return {}
+
         aligned.columns = ["portfolio", "benchmark"]
         active = aligned["portfolio"] - aligned["benchmark"]
 
@@ -40,10 +52,11 @@ class AnalyticsEngine:
             tail_port = aligned["portfolio"][aligned["portfolio"] <= q_port]
             tail_act = active[active <= q_act]
 
-            out[f"var_{int(cl * 100)}"] = float(-q_port)
-            out[f"cvar_{int(cl * 100)}"] = float(-tail_port.mean()) if len(tail_port) else np.nan
-            out[f"relative_var_{int(cl * 100)}"] = float(-q_act)
-            out[f"relative_cvar_{int(cl * 100)}"] = float(-tail_act.mean()) if len(tail_act) else np.nan
+            suffix = int(cl * 100)
+            out[f"var_{suffix}"] = float(-q_port)
+            out[f"cvar_{suffix}"] = float(-tail_port.mean()) if len(tail_port) else np.nan
+            out[f"relative_var_{suffix}"] = float(-q_act)
+            out[f"relative_cvar_{suffix}"] = float(-tail_act.mean()) if len(tail_act) else np.nan
 
         return out
 
@@ -70,6 +83,9 @@ class AnalyticsEngine:
         min_periods: int = 30,
     ) -> pd.Series:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return pd.Series(dtype=float)
+
         aligned.columns = ["portfolio", "benchmark"]
 
         cov = aligned["portfolio"].rolling(window, min_periods=min_periods).cov(aligned["benchmark"])
@@ -85,6 +101,9 @@ class AnalyticsEngine:
         min_periods: int = 30,
     ) -> pd.Series:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return pd.Series(dtype=float)
+
         aligned.columns = ["portfolio", "benchmark"]
 
         active = aligned["portfolio"] - aligned["benchmark"]
@@ -102,6 +121,9 @@ class AnalyticsEngine:
         min_periods: int = 30,
     ) -> pd.Series:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return pd.Series(dtype=float)
+
         aligned.columns = ["portfolio", "benchmark"]
 
         te = (
@@ -113,7 +135,7 @@ class AnalyticsEngine:
         return te.replace([np.inf, -np.inf], np.nan)
 
     def drawdown_series(self, returns: pd.Series) -> pd.Series:
-        cumulative = (1 + returns).cumprod()
+        cumulative = (1 + returns.fillna(0.0)).cumprod()
         rolling_max = cumulative.cummax()
         return cumulative / rolling_max - 1
 
@@ -123,6 +145,9 @@ class AnalyticsEngine:
         benchmark_returns: pd.Series,
     ) -> pd.DataFrame:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return pd.DataFrame()
+
         aligned.columns = ["portfolio", "benchmark"]
 
         p_dd = self.drawdown_series(aligned["portfolio"])
@@ -141,6 +166,9 @@ class AnalyticsEngine:
         benchmark_returns: pd.Series,
     ) -> pd.Series:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return pd.Series(dtype=float)
+
         aligned.columns = ["portfolio", "benchmark"]
         return aligned["portfolio"] - aligned["benchmark"]
 
@@ -151,13 +179,13 @@ class AnalyticsEngine:
         benchmark_ticker: str,
         asset_metadata: pd.DataFrame,
     ) -> pd.DataFrame:
-        if asset_returns.empty:
+        if asset_returns is None or asset_returns.empty:
             return pd.DataFrame()
 
         assets = list(asset_returns.columns)
-        w = pd.Series(weights).reindex(assets).fillna(0.0)
+        w = pd.Series(weights, dtype=float).reindex(assets).fillna(0.0)
 
-        b = pd.Series(0.0, index=assets)
+        b = pd.Series(0.0, index=assets, dtype=float)
         if benchmark_ticker in b.index:
             b[benchmark_ticker] = 1.0
         elif "SPY" in b.index:
@@ -191,12 +219,18 @@ class AnalyticsEngine:
         )
 
         total_arc = region_df["active_risk_contribution"].sum()
-        if total_arc != 0:
-            region_df["pct_active_risk_contribution"] = region_df["active_risk_contribution"] / total_arc
+        if not np.isclose(total_arc, 0.0):
+            region_df["pct_active_risk_contribution"] = (
+                region_df["active_risk_contribution"] / total_arc
+            )
         else:
             region_df["pct_active_risk_contribution"] = np.nan
 
-        region_df = region_df.sort_values("pct_active_risk_contribution", ascending=False)
+        region_df = region_df.sort_values(
+            "pct_active_risk_contribution",
+            ascending=False,
+            na_position="last",
+        )
         return region_df
 
     def pca_factor_analysis(
@@ -221,7 +255,7 @@ class AnalyticsEngine:
         pca = PCA(n_components=n_components)
         scores = pca.fit_transform(x_scaled)
 
-        pcs = [f"PC{i+1}" for i in range(n_components)]
+        pcs = [f"PC{i + 1}" for i in range(n_components)]
         loadings = pd.DataFrame(
             pca.components_.T,
             index=clean.columns,
@@ -232,7 +266,11 @@ class AnalyticsEngine:
             index=clean.index,
             columns=pcs,
         )
-        evr = pd.Series(pca.explained_variance_ratio_, index=pcs, name="explained_variance_ratio")
+        evr = pd.Series(
+            pca.explained_variance_ratio_,
+            index=pcs,
+            name="explained_variance_ratio",
+        )
 
         interpretation = {}
         for pc in pcs[:3]:
@@ -243,7 +281,9 @@ class AnalyticsEngine:
                 interpretation[pc] = "Broad market factor: most assets move in the same direction."
             else:
                 top_abs = col.abs().sort_values(ascending=False).head(5).index.tolist()
-                interpretation[pc] = f"Differentiation factor: strongest loadings include {', '.join(top_abs)}."
+                interpretation[pc] = (
+                    f"Differentiation factor: strongest loadings include {', '.join(top_abs)}."
+                )
 
         return {
             "explained_variance_ratio": evr,
@@ -257,7 +297,10 @@ class AnalyticsEngine:
         weights: Dict[str, float],
         cov: pd.DataFrame,
     ) -> pd.DataFrame:
-        w = pd.Series(weights).reindex(cov.index).fillna(0.0)
+        if cov is None or cov.empty:
+            return pd.DataFrame()
+
+        w = pd.Series(weights, dtype=float).reindex(cov.index).fillna(0.0)
         sigma = cov.values
         port_var = float(w.values @ sigma @ w.values)
         if port_var <= 0:
@@ -265,7 +308,12 @@ class AnalyticsEngine:
 
         marginal = sigma @ w.values
         total_contrib = w.values * marginal / np.sqrt(port_var)
-        pct_contrib = total_contrib / np.sum(total_contrib)
+        total_contrib_sum = np.sum(total_contrib)
+
+        if np.isclose(total_contrib_sum, 0.0):
+            pct_contrib = np.full_like(total_contrib, np.nan, dtype=float)
+        else:
+            pct_contrib = total_contrib / total_contrib_sum
 
         return pd.DataFrame({
             "asset": cov.index,
@@ -273,7 +321,7 @@ class AnalyticsEngine:
             "marginal_risk": marginal,
             "risk_contribution": total_contrib,
             "pct_risk_contribution": pct_contrib,
-        }).sort_values("pct_risk_contribution", ascending=False)
+        }).sort_values("pct_risk_contribution", ascending=False, na_position="last")
 
     def calculate_all_metrics(
         self,
@@ -282,6 +330,9 @@ class AnalyticsEngine:
         initial_capital: float,
     ) -> Dict[str, Any]:
         aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        if aligned.empty:
+            return {}
+
         aligned.columns = ["portfolio", "benchmark"]
 
         portfolio_values = self.portfolio_values(aligned["portfolio"], initial_capital)
@@ -294,21 +345,31 @@ class AnalyticsEngine:
         total_return_benchmark = final_benchmark_value / initial_capital - 1
 
         n_years = len(aligned) / self.config.annual_trading_days
-        annual_return_portfolio = (1 + total_return_portfolio) ** (1 / n_years) - 1 if n_years > 0 else 0.0
-        annual_return_benchmark = (1 + total_return_benchmark) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+        annual_return_portfolio = (
+            (1 + total_return_portfolio) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+        )
+        annual_return_benchmark = (
+            (1 + total_return_benchmark) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+        )
 
         daily_rf = self.config.risk_free_rate / self.config.annual_trading_days
         excess_returns = aligned["portfolio"] - daily_rf
 
-        volatility = float(aligned["portfolio"].std() * np.sqrt(self.config.annual_trading_days))
+        portfolio_std = aligned["portfolio"].std()
+        volatility = float(portfolio_std * np.sqrt(self.config.annual_trading_days))
+
         sharpe = (
-            float((excess_returns.mean() / aligned["portfolio"].std()) * np.sqrt(self.config.annual_trading_days))
-            if aligned["portfolio"].std() > 0
+            float((excess_returns.mean() / portfolio_std) * np.sqrt(self.config.annual_trading_days))
+            if portfolio_std > 0
             else 0.0
         )
 
         downside = aligned["portfolio"][aligned["portfolio"] < 0]
-        downside_vol = float(downside.std() * np.sqrt(self.config.annual_trading_days)) if len(downside) > 1 else np.nan
+        downside_vol = (
+            float(downside.std() * np.sqrt(self.config.annual_trading_days))
+            if len(downside) > 1
+            else np.nan
+        )
         sortino = (
             float((excess_returns.mean() * self.config.annual_trading_days) / downside_vol)
             if pd.notna(downside_vol) and downside_vol > 0
