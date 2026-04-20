@@ -1,8 +1,3 @@
-
-import os
-
-port = int(os.environ.get("PORT", 10000))
-
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -14,163 +9,65 @@ from core.config import ProfessionalConfig
 from core.engine import ProfessionalPortfolioEngine
 from core.universes import UNIVERSE_REGISTRY
 
-
-# =========================================================
-# PAGE CONFIG
-# =========================================================
 st.set_page_config(
     page_title="QFA Prime Finance Platform",
-    page_icon="📊",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-
-# =========================================================
-# STYLING (ÜST ÇİZGİ border-top ile KESİN ÇÖZÜM)
-# =========================================================
 CUSTOM_CSS = """
 <style>
-    .main > div {
-        padding-top: 0.10rem;
-    }
-
-    .block-container {
-        max-width: 100% !important;
-        width: 100% !important;
-        padding-top: 0.20rem !important;
-        padding-left: 2.2rem !important;
-        padding-right: 2.2rem !important;
-        padding-bottom: 1.2rem !important;
-    }
-
-    section.main > div {
-        max-width: 100% !important;
-    }
-
-    .stApp {
-        max-width: 100% !important;
-    }
-
-    .hero-outer {
-        width: 100%;
-        display: block;
-        margin: 0 0 0.75rem 0;
-    }
-
-    .hero-shell {
-        position: relative;
-        width: 100%;
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-top: 4px solid #2E86AB;   /* KESİN ÇÖZÜM: border-top ile üst çizgi */
-        border-top-left-radius: 16px;
-        border-top-right-radius: 16px;
-        border-radius: 16px;
-        padding: 80px 24px 40px 24px;
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
-    }
-
-    .hero-title {
-        display: block;
-        width: 100%;
-        font-size: 1.6rem !important;
-        font-weight: 700;
-        line-height: 1.3;
-        color: #0f172a;
-        text-align: left;
-        margin: 0 0 16px 0;
-        padding: 0;
-        letter-spacing: -0.01em;
-        word-break: break-word;
-        overflow-wrap: break-word;
-        white-space: normal;
-    }
-
-    .hero-subtitle {
-        display: block;
-        width: 100%;
-        font-size: 1rem !important;
-        font-weight: 500;
-        line-height: 1.4;
-        color: #475569;
-        text-align: left;
-        margin-top: 0.5rem;
-        padding: 0;
-        word-break: break-word;
-        overflow-wrap: break-word;
-        white-space: normal;
-    }
-
-    .kpi-card {
-        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 12px;
-        padding: 12px 12px 10px 12px;
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
-        min-height: 94px;
-    }
-
-    .kpi-title {
-        font-size: 0.68rem;
-        color: #cbd5e1;
-        margin-bottom: 6px;
-        font-weight: 600;
-        line-height: 1.2;
-    }
-
-    .kpi-value {
-        font-size: 1.06rem;
-        color: white;
-        font-weight: 800;
-        line-height: 1.1;
-    }
-
-    .kpi-sub {
-        font-size: 0.68rem;
-        color: #94a3b8;
-        margin-top: 5px;
-        line-height: 1.2;
-    }
-
-    .section-label {
-        font-size: 0.90rem;
-        font-weight: 800;
-        color: #0f172a;
-        margin: 0.25rem 0 0.6rem 0;
-    }
-
-    .small-note {
-        color: #64748b;
-        font-size: 0.72rem;
-    }
-
-    @media (max-width: 1100px) {
-        .block-container {
-            padding-left: 1.2rem !important;
-            padding-right: 1.2rem !important;
-        }
-
-        .hero-shell {
-            padding: 50px 18px 30px 18px;
-        }
-
-        .hero-title {
-            font-size: 1.3rem !important;
-        }
-
-        .hero-subtitle {
-            font-size: 0.85rem !important;
-        }
-    }
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 2rem;
+    max-width: 1600px;
+}
+.qfa-hero {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 20px;
+    padding: 1.5rem 1.5rem 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+}
+.qfa-hero h1 {
+    font-size: 2rem;
+    font-weight: 800;
+    margin: 0 0 0.25rem 0;
+    color: #0f172a;
+}
+.qfa-hero p {
+    margin: 0;
+    color: #334155;
+    font-size: 1.02rem;
+}
+.qfa-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+    padding: 1rem 1rem 0.85rem 1rem;
+    min-height: 132px;
+}
+.qfa-card-title {
+    color: #64748b;
+    font-size: 0.90rem;
+    margin-bottom: 0.4rem;
+}
+.qfa-card-value {
+    color: #0f172a;
+    font-size: 1.5rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+}
+.qfa-card-sub {
+    color: #94a3b8;
+    font-size: 0.82rem;
+}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# =========================================================
-# HELPERS
-# =========================================================
 def fmt_pct(x: Optional[float]) -> str:
     if x is None or pd.isna(x):
         return "N/A"
@@ -204,10 +101,10 @@ def safe_df(obj) -> pd.DataFrame:
 def render_kpi_card(title: str, value: str, sub: str = "") -> None:
     st.markdown(
         f"""
-        <div class="kpi-card">
-            <div class="kpi-title">{title}</div>
-            <div class="kpi-value">{value}</div>
-            <div class="kpi-sub">{sub}</div>
+        <div class="qfa-card">
+            <div class="qfa-card-title">{title}</div>
+            <div class="qfa-card-value">{value}</div>
+            <div class="qfa-card-sub">{sub}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -228,7 +125,6 @@ def make_line_chart(
     height: int = 500,
 ) -> go.Figure:
     fig = go.Figure()
-
     for col in df.columns:
         fig.add_trace(
             go.Scatter(
@@ -259,13 +155,7 @@ def make_bar_chart(
     color: Optional[str] = None,
     height: int = 500,
 ) -> go.Figure:
-    fig = px.bar(
-        df,
-        x=x,
-        y=y,
-        color=color,
-        title=title,
-    )
+    fig = px.bar(df, x=x, y=y, color=color, title=title)
     fig.update_layout(
         height=height,
         template="plotly_white",
@@ -325,7 +215,6 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
-
     pct_cols = [
         "annual_return",
         "annual_return_benchmark",
@@ -338,7 +227,6 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         "excess_return_vs_benchmark_pct",
         "alpha",
     ]
-
     num_cols = [
         "sharpe_ratio",
         "sortino_ratio",
@@ -351,7 +239,6 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
     for c in pct_cols:
         if c in out.columns:
             out[c] = out[c].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
-
     for c in num_cols:
         if c in out.columns:
             out[c] = out[c].map(lambda x: f"{x:,.3f}" if pd.notna(x) else "N/A")
@@ -382,9 +269,6 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
     return out
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
 
@@ -410,7 +294,6 @@ with st.sidebar:
         value=100000.0,
         step=1000.0,
     )
-
     risk_free_rate = st.number_input(
         "Risk-Free Rate",
         min_value=0.0,
@@ -419,39 +302,33 @@ with st.sidebar:
         step=0.005,
         format="%.3f",
     )
-
     min_observations = st.number_input(
         "Minimum Observations",
         min_value=20,
         value=60,
         step=5,
     )
-
     rolling_window = st.number_input(
         "Rolling Window",
         min_value=20,
         value=63,
         step=1,
     )
-
     use_log_returns = st.checkbox("Use Log Returns", value=False)
     allow_short = st.checkbox("Allow Short Selling", value=False)
 
     st.markdown("---")
     st.markdown("### Expected Return / Risk Settings")
-
     expected_return_method = st.selectbox(
         "Expected Return Method",
         options=["historical_mean"],
         index=0,
     )
-
     covariance_method = st.selectbox(
         "Covariance Method",
         options=["sample_cov"],
         index=0,
     )
-
     correlation_method = st.selectbox(
         "Correlation Method",
         options=["pearson"],
@@ -464,13 +341,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Stress Filters")
-
     selected_family = st.selectbox(
         "Scenario Family",
         options=["All", "Crisis", "Inflation", "Banking_Stress", "Sharp_Rally", "Sharp_Selloff"],
         index=0,
     )
-
     minimum_severity_threshold = st.slider(
         "Minimum Severity Threshold",
         min_value=0.0,
@@ -478,7 +353,6 @@ with st.sidebar:
         value=0.0,
         step=0.01,
     )
-
     quick_view = st.selectbox(
         "Quick View",
         options=[
@@ -493,72 +367,86 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.caption("Yahoo Finance on free cloud instances can throttle requests. If that happens, retry with fewer assets.")
     run_button = st.button("Run Professional Analytics", type="primary", use_container_width=True)
 
 
-# =========================================================
-# HEADER
-# =========================================================
 st.markdown(
     """
-    <div class="hero-outer">
-        <div class="hero-shell">
-            <div class="hero-title">QFA Prime Finance Platform</div>
-            <div class="hero-subtitle">
-                Institutional portfolio analytics, risk diagnostics, stress testing, and factor intelligence
-            </div>
-        </div>
+    <div class="qfa-hero">
+        <h1>QFA Prime Finance Platform</h1>
+        <p>Institutional portfolio analytics, risk diagnostics, stress testing, and factor intelligence</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-
-# =========================================================
-# SESSION STATE
-# =========================================================
 if "engine_result" not in st.session_state:
     st.session_state.engine_result = None
-
 if "engine_error" not in st.session_state:
     st.session_state.engine_error = None
+if "last_run_params" not in st.session_state:
+    st.session_state.last_run_params = None
 
+current_params = {
+    "benchmark_symbol": benchmark_symbol,
+    "default_start_date": default_start_date,
+    "initial_capital": float(initial_capital),
+    "risk_free_rate": float(risk_free_rate),
+    "min_observations": int(min_observations),
+    "rolling_window": int(rolling_window),
+    "use_log_returns": bool(use_log_returns),
+    "allow_short": bool(allow_short),
+    "selected_universe": selected_universe,
+    "expected_return_method": expected_return_method,
+    "covariance_method": covariance_method,
+    "correlation_method": correlation_method,
+    "bl_enabled": bool(bl_enabled),
+    "selected_family": selected_family,
+    "minimum_severity_threshold": float(minimum_severity_threshold),
+    "quick_view": quick_view,
+}
 
-# =========================================================
-# ENGINE EXECUTION
-# =========================================================
-if run_button or st.session_state.engine_result is None:
+if run_button:
+    st.session_state.last_run_params = current_params.copy()
+
+if st.session_state.last_run_params is None:
+    st.info("Choose your settings in the sidebar, then click **Run Professional Analytics**.")
+    st.stop()
+
+run_params = st.session_state.last_run_params
+
+with st.spinner("Downloading data and running portfolio analytics..."):
     try:
         config = ProfessionalConfig(
-            benchmark_symbol=benchmark_symbol,
-            default_start_date=default_start_date,
-            initial_capital=float(initial_capital),
-            risk_free_rate=float(risk_free_rate),
-            min_observations=int(min_observations),
-            rolling_window=int(rolling_window),
-            use_log_returns=bool(use_log_returns),
-            allow_short=bool(allow_short),
-            selected_universe=selected_universe,
-            expected_return_method=expected_return_method,
-            covariance_method=covariance_method,
-            correlation_method=correlation_method,
+            benchmark_symbol=run_params["benchmark_symbol"],
+            default_start_date=run_params["default_start_date"],
+            initial_capital=run_params["initial_capital"],
+            risk_free_rate=run_params["risk_free_rate"],
+            min_observations=run_params["min_observations"],
+            rolling_window=run_params["rolling_window"],
+            use_log_returns=run_params["use_log_returns"],
+            allow_short=run_params["allow_short"],
+            selected_universe=run_params["selected_universe"],
+            expected_return_method=run_params["expected_return_method"],
+            covariance_method=run_params["covariance_method"],
+            correlation_method=run_params["correlation_method"],
         )
 
         engine = ProfessionalPortfolioEngine(
             config=config,
             bl_controls={
-                "enabled": bl_enabled,
+                "enabled": run_params["bl_enabled"],
                 "view_mode": "ticker",
                 "views_payload": [],
             },
             scenario_controls={
-                "selected_family": selected_family,
-                "minimum_severity_threshold": float(minimum_severity_threshold),
-                "quick_view": quick_view,
+                "selected_family": run_params["selected_family"],
+                "minimum_severity_threshold": run_params["minimum_severity_threshold"],
+                "quick_view": run_params["quick_view"],
             },
         )
         engine.run()
-
         st.session_state.engine_result = engine
         st.session_state.engine_error = None
 
@@ -571,32 +459,28 @@ engine_error = st.session_state.engine_error
 
 if engine_error:
     st.error(f"Application error: {engine_error}")
+    if "rate limit" in engine_error.lower() or "too many requests" in engine_error.lower():
+        st.warning(
+            "Yahoo Finance appears to be throttling requests. "
+            "Wait 30-60 seconds and rerun, preferably with a smaller universe."
+        )
     st.stop()
 
 if engine is None:
     st.warning("No analysis output is available.")
     st.stop()
 
-
-# =========================================================
-# DIAGNOSTICS
-# =========================================================
 diag = engine.diagnostics.summary()
-
 if diag.get("warnings"):
     with st.expander("Diagnostics Warnings", expanded=False):
         for warning_msg in diag["warnings"]:
             st.warning(str(warning_msg))
 
 if diag.get("errors"):
-    with st.expander("Diagnostics Errors", expanded=False):
+    with st.expander("Diagnostics Errors", expanded=True):
         for error_msg in diag["errors"]:
             st.error(str(error_msg))
 
-
-# =========================================================
-# BEST STRATEGY KPIS
-# =========================================================
 best_name = engine.best_strategy_name()
 best_metrics = engine.metrics.get(best_name, {})
 
@@ -616,10 +500,6 @@ with k6:
 
 st.markdown("")
 
-
-# =========================================================
-# TABS
-# =========================================================
 tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.tabs(
     [
         "Overview",
@@ -631,12 +511,8 @@ tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.t
     ]
 )
 
-
-# =========================================================
-# OVERVIEW
-# =========================================================
 with tab_overview:
-    st.markdown('<div class="section-label">Executive Summary</div>', unsafe_allow_html=True)
+    st.subheader("Executive Summary")
 
     best_portfolio_returns = safe_series(best_metrics.get("portfolio_returns"))
     best_benchmark_returns = safe_series(best_metrics.get("benchmark_returns"))
@@ -690,19 +566,15 @@ with tab_overview:
         "Profit Factor": fmt_num(best_metrics.get("profit_factor"), 3),
     }
 
-    st.markdown('<div class="section-label">Best Strategy Metrics</div>', unsafe_allow_html=True)
+    st.subheader("Best Strategy Metrics")
     st.dataframe(
         pd.DataFrame({"Metric": list(summary_rows.keys()), "Value": list(summary_rows.values())}),
         use_container_width=True,
         hide_index=True,
     )
 
-
-# =========================================================
-# STRATEGY COMPARISON
-# =========================================================
 with tab_strategies:
-    st.markdown('<div class="section-label">Strategy Comparison Table</div>', unsafe_allow_html=True)
+    st.subheader("Strategy Comparison Table")
 
     metrics_df = safe_df(engine.metrics_df)
     if not metrics_df.empty:
@@ -732,277 +604,54 @@ with tab_strategies:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    if not engine.strategy_df.empty:
-        st.markdown('<div class="section-label">Strategy Diagnostics</div>', unsafe_allow_html=True)
+    if hasattr(engine, "strategy_df") and not engine.strategy_df.empty:
+        st.subheader("Strategy Diagnostics")
         st.dataframe(engine.strategy_df, use_container_width=True)
 
-
-# =========================================================
-# RISK ANALYTICS
-# =========================================================
 with tab_risk:
-    st.markdown('<div class="section-label">Risk Dashboard</div>', unsafe_allow_html=True)
-
-    r1, r2, r3, r4 = st.columns(4)
-    with r1:
-        render_kpi_card("Tracking Error", fmt_pct(best_metrics.get("tracking_error")), "Annualized")
-    with r2:
-        render_kpi_card("Information Ratio", fmt_num(best_metrics.get("information_ratio"), 3), "Active efficiency")
-    with r3:
-        render_kpi_card("Beta", fmt_num(best_metrics.get("beta"), 3), "Relative sensitivity")
-    with r4:
-        render_kpi_card("Alpha", fmt_pct(best_metrics.get("alpha")), "Annualized excess")
-
-    portfolio_returns = safe_series(best_metrics.get("portfolio_returns"))
-    benchmark_returns = safe_series(best_metrics.get("benchmark_returns"))
-
-    if not portfolio_returns.empty and not benchmark_returns.empty:
-        rolling_sharpe = engine.analytics.rolling_sharpe(
-            portfolio_returns,
-            window=engine.config.rolling_window,
-            min_periods=30,
-        )
-        rolling_beta = engine.analytics.rolling_beta(
-            portfolio_returns,
-            benchmark_returns,
-            window=engine.config.rolling_window,
-            min_periods=30,
-        )
-        rolling_ir = engine.analytics.rolling_information_ratio(
-            portfolio_returns,
-            benchmark_returns,
-            window=engine.config.rolling_window,
-            min_periods=30,
-        )
-        rolling_te = engine.analytics.rolling_tracking_error(
-            portfolio_returns,
-            benchmark_returns,
-            window=engine.config.rolling_window,
-            min_periods=30,
-        )
-
-        charts_to_show = [
-            ("Rolling Sharpe Ratio", rolling_sharpe, "Sharpe"),
-            ("Rolling Beta", rolling_beta, "Beta"),
-            ("Rolling Information Ratio", rolling_ir, "Information Ratio"),
-            ("Rolling Tracking Error", rolling_te, "Tracking Error"),
-        ]
-
-        for title, series_obj, ytitle in charts_to_show:
-            s = safe_series(series_obj)
-            if not s.empty:
-                fig = make_line_chart(
-                    pd.DataFrame({title: s}),
-                    title=title,
-                    yaxis_title=ytitle,
-                    height=480,
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Risk Dashboard")
 
     tail_df = prepare_tail_metrics(best_metrics)
     if not tail_df.empty:
-        st.markdown('<div class="section-label">Relative VaR / CVaR / Tail Metrics</div>', unsafe_allow_html=True)
         st.dataframe(tail_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Tail metrics are not available for the best strategy.")
 
-    rc_df = engine.risk_contributions.get(best_name, pd.DataFrame())
-    if not rc_df.empty:
-        st.markdown('<div class="section-label">Risk Contribution Table</div>', unsafe_allow_html=True)
-
-        show_rc = rc_df.copy()
-        for col in ["weight", "risk_contribution", "pct_risk_contribution"]:
-            if col in show_rc.columns:
-                show_rc[col] = show_rc[col].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
-
-        if "marginal_risk" in show_rc.columns:
-            show_rc["marginal_risk"] = show_rc["marginal_risk"].map(
-                lambda x: f"{x:,.4f}" if pd.notna(x) else "N/A"
-            )
-
-        st.dataframe(show_rc, use_container_width=True, hide_index=True)
-
-        if "asset" in rc_df.columns and "pct_risk_contribution" in rc_df.columns:
-            fig = make_bar_chart(
-                rc_df,
-                x="asset",
-                y="pct_risk_contribution",
-                title=f"Risk Contribution by Asset: {best_name}",
-                height=500,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-
-# =========================================================
-# STRESS TESTING
-# =========================================================
 with tab_stress:
-    st.markdown('<div class="section-label">Historical Stress Dashboard</div>', unsafe_allow_html=True)
+    st.subheader("Stress Testing")
 
-    stress_df = engine.historical_stress.get(best_name, pd.DataFrame())
-    stress_df = engine.filter_stress_dataframe(stress_df)
+    stress_df = safe_df(getattr(engine, "stress_table", pd.DataFrame()))
+    if stress_df.empty:
+        stress_df = safe_df(best_metrics.get("stress_table"))
 
     if not stress_df.empty:
-        worst_scenario = stress_df.iloc[0]
-
-        s1, s2, s3, s4 = st.columns(4)
-        with s1:
-            render_kpi_card("Worst Historical Scenario", str(worst_scenario.get("scenario", "N/A")), "Filtered view")
-        with s2:
-            render_kpi_card("Average Severity", fmt_pct(stress_df["severity_score"].mean()), "Across filtered scenarios")
-        with s3:
-            render_kpi_card("Worst Relative Return", fmt_pct(stress_df["relative_return"].min()), "Filtered scenarios")
-        with s4:
-            render_kpi_card("Scenario Count", fmt_num(float(len(stress_df)), 0), "Passing filters")
-
-        st.dataframe(
-            prepare_stress_display_table(stress_df),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        if "scenario" in stress_df.columns and "severity_score" in stress_df.columns:
-            fig = make_bar_chart(
-                stress_df,
-                x="scenario",
-                y="severity_score",
-                color="family" if "family" in stress_df.columns else None,
-                title="Scenario Severity Ranking",
-                height=500,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        scenario_options = stress_df["scenario"].astype(str).tolist()
-        selected_scenario = st.selectbox(
-            "Scenario Path View",
-            options=scenario_options,
-            key="stress_scenario_selector",
-        )
-
-        path_map = engine.historical_stress_paths.get(best_name, {})
-        path_df = path_map.get(selected_scenario, pd.DataFrame())
-
-        if not path_df.empty:
-            fig = make_line_chart(
-                path_df,
-                title=f"Scenario Path: {selected_scenario}",
-                yaxis_title="Cumulative Return",
-                height=500,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(prepare_stress_display_table(stress_df), use_container_width=True)
     else:
-        st.info("No historical stress scenarios are available for the selected filters.")
+        st.info("Stress testing output is not available.")
 
-    hypo_df = engine.hypothetical_shocks.get(best_name, pd.DataFrame())
-    if not hypo_df.empty:
-        st.markdown('<div class="section-label">Hypothetical Shock Analysis</div>', unsafe_allow_html=True)
-        show_hypo = hypo_df.copy()
-        if "shock" in show_hypo.columns:
-            show_hypo["shock"] = show_hypo["shock"].map(lambda x: f"{x:.0%}" if pd.notna(x) else "N/A")
-        if "portfolio_impact" in show_hypo.columns:
-            show_hypo["portfolio_impact"] = show_hypo["portfolio_impact"].map(
-                lambda x: f"{x:.2%}" if pd.notna(x) else "N/A"
-            )
-        st.dataframe(show_hypo, use_container_width=True, hide_index=True)
-
-    sharp_df = engine.sharp_fluctuation_windows.get(best_name, pd.DataFrame())
-    if not sharp_df.empty:
-        st.markdown('<div class="section-label">Sharp Fluctuation Windows</div>', unsafe_allow_html=True)
-        show_sharp = sharp_df.copy()
-        if "window_return" in show_sharp.columns:
-            show_sharp["window_return"] = show_sharp["window_return"].map(
-                lambda x: f"{x:.2%}" if pd.notna(x) else "N/A"
-            )
-        st.dataframe(show_sharp, use_container_width=True, hide_index=True)
-
-
-# =========================================================
-# FACTOR PCA
-# =========================================================
 with tab_factors:
-    st.markdown('<div class="section-label">PCA Factor Analysis</div>', unsafe_allow_html=True)
+    st.subheader("Factor PCA")
 
-    pca_results = engine.pca_results or {}
-    evr = safe_series(pca_results.get("explained_variance_ratio"))
-    loadings = safe_df(pca_results.get("loadings"))
-    scores = safe_df(pca_results.get("scores"))
-    interpretation = pca_results.get("interpretation", {})
+    factor_df = safe_df(getattr(engine, "factor_pca_df", pd.DataFrame()))
+    if not factor_df.empty:
+        st.dataframe(factor_df, use_container_width=True)
+    else:
+        st.info("Factor PCA output is not available.")
 
-    if not evr.empty:
-        evr_df = evr.reset_index()
-        evr_df.columns = ["Principal Component", "Explained Variance Ratio"]
-
-        fig = make_bar_chart(
-            evr_df,
-            x="Principal Component",
-            y="Explained Variance Ratio",
-            title="Explained Variance by Principal Component",
-            height=460,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    if not loadings.empty:
-        st.markdown('<div class="section-label">PCA Loadings</div>', unsafe_allow_html=True)
-        st.dataframe(loadings.round(4), use_container_width=True)
-
-    if interpretation:
-        st.markdown('<div class="section-label">Factor Interpretation</div>', unsafe_allow_html=True)
-        interp_df = pd.DataFrame(
-            {"Factor": list(interpretation.keys()), "Interpretation": list(interpretation.values())}
-        )
-        st.dataframe(interp_df, use_container_width=True, hide_index=True)
-
-    if not scores.empty and {"PC1", "PC2"}.issubset(set(scores.columns)):
-        scatter_df = scores[["PC1", "PC2"]].copy()
-        scatter_df["Date"] = scatter_df.index.astype(str)
-
-        fig = px.scatter(
-            scatter_df,
-            x="PC1",
-            y="PC2",
-            hover_name="Date",
-            title="PC1 vs PC2 Score Scatter",
-        )
-        fig.update_layout(
-            template="plotly_white",
-            height=500,
-            margin=dict(l=20, r=20, t=60, b=20),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# =========================================================
-# DATA & DIAGNOSTICS
-# =========================================================
 with tab_data:
-    st.markdown('<div class="section-label">Universe Metadata</div>', unsafe_allow_html=True)
-    st.dataframe(engine.data.asset_metadata, use_container_width=True, hide_index=True)
+    st.subheader("Data & Diagnostics")
 
-    st.markdown('<div class="section-label">Asset Price Sample</div>', unsafe_allow_html=True)
-    st.dataframe(engine.data.asset_prices.tail(20), use_container_width=True)
+    st.write("Selected universe:", run_params["selected_universe"])
+    st.write("Benchmark:", run_params["benchmark_symbol"])
+    st.write("Start date:", run_params["default_start_date"])
 
-    st.markdown('<div class="section-label">Asset Return Sample</div>', unsafe_allow_html=True)
-    st.dataframe(engine.data.asset_returns.tail(20), use_container_width=True)
+    if hasattr(engine, "prices") and isinstance(engine.prices, pd.DataFrame) and not engine.prices.empty:
+        st.markdown("**Price History Preview**")
+        st.dataframe(engine.prices.tail(10), use_container_width=True)
 
-    st.markdown('<div class="section-label">Benchmark Return Sample</div>', unsafe_allow_html=True)
-    st.dataframe(
-        engine.data.benchmark_returns.tail(20).to_frame("benchmark_return"),
-        use_container_width=True,
-    )
+    if hasattr(engine, "returns") and isinstance(engine.returns, pd.DataFrame) and not engine.returns.empty:
+        st.markdown("**Return Matrix Preview**")
+        st.dataframe(engine.returns.tail(10), use_container_width=True)
 
-    info_items = diag.get("info", {})
-    if info_items:
-        st.markdown('<div class="section-label">Diagnostics Summary</div>', unsafe_allow_html=True)
-        diag_df = pd.DataFrame(
-            {"Key": list(info_items.keys()), "Value": list(info_items.values())}
-        )
-        st.dataframe(diag_df, use_container_width=True, hide_index=True)
-
-    st.markdown(
-        f"""
-        <div class="small-note">
-            Universe: <b>{engine.config.selected_universe}</b> &nbsp;|&nbsp;
-            Benchmark: <b>{engine.config.benchmark_symbol}</b> &nbsp;|&nbsp;
-            Start Date: <b>{engine.config.default_start_date}</b>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("**Diagnostics Summary**")
+    st.json(diag)
