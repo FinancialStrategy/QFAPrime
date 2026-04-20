@@ -156,8 +156,6 @@ CUSTOM_CSS = """
         }
     }
 </style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =========================================================
