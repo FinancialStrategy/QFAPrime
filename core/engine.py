@@ -13,10 +13,10 @@ from core.monte_carlo import MonteCarloEngine
 from core.optimizers import ProfessionalOptimizer, StrategyResult
 from core.risk_models import RiskModelBuilder
 from core.scenarios import (
+    detect_sharp_fluctuation_windows,
     extract_scenario_path,
     run_historical_stress_tests,
     run_hypothetical_shocks,
-    detect_sharp_fluctuation_windows,
 )
 from core.universes import flatten_universe_dict, get_universe_definition
 
@@ -29,7 +29,11 @@ class ProfessionalPortfolioEngine:
         scenario_controls: Optional[Dict] = None,
     ):
         self.config = config or ProfessionalConfig()
-        self.bl_controls = bl_controls or {"enabled": False, "view_mode": "ticker", "views_payload": []}
+        self.bl_controls = bl_controls or {
+            "enabled": False,
+            "view_mode": "ticker",
+            "views_payload": [],
+        }
         self.scenario_controls = scenario_controls or {
             "selected_family": "All",
             "minimum_severity_threshold": 0.0,
@@ -98,11 +102,15 @@ class ProfessionalPortfolioEngine:
 
         for name, result in self.strategies.items():
             pr = self.analytics.portfolio_returns(self.data.asset_returns, result.weights)
+
             metrics = self.analytics.calculate_all_metrics(
                 pr,
                 self.data.benchmark_returns,
                 self.config.initial_capital,
             )
+            if not metrics:
+                continue
+
             self.metrics[name] = metrics
 
             self.risk_contributions[name] = self.analytics.risk_contribution_table(
@@ -117,7 +125,7 @@ class ProfessionalPortfolioEngine:
             self.historical_stress[name] = stress_df
 
             path_map: Dict[str, pd.DataFrame] = {}
-            if not stress_df.empty:
+            if stress_df is not None and not stress_df.empty:
                 for _, row in stress_df.iterrows():
                     path_map[row["scenario"]] = extract_scenario_path(
                         metrics["portfolio_returns"],
@@ -147,11 +155,14 @@ class ProfessionalPortfolioEngine:
                 prior = result.diagnostics.get("prior_returns")
                 posterior = result.diagnostics.get("posterior_returns")
                 bl_w = result.diagnostics.get("bl_weight_output")
-                if prior:
+
+                if prior is not None:
                     self.bl_prior_returns = pd.Series(prior)
-                if posterior:
+
+                if posterior is not None:
                     self.bl_posterior_returns = pd.Series(posterior)
-                if bl_w:
+
+                if bl_w is not None:
                     self.bl_weights = bl_w
 
         if self.bl_posterior_returns is not None and self.cov is not None:
@@ -162,27 +173,35 @@ class ProfessionalPortfolioEngine:
             n_components=5,
         )
 
-        self.metrics_df = pd.DataFrame(self.metrics).T.sort_values("sharpe_ratio", ascending=False)
-        self.strategy_df = pd.DataFrame([
-            {
+        if self.metrics:
+            self.metrics_df = pd.DataFrame(self.metrics).T.sort_values(
+                "sharpe_ratio",
+                ascending=False,
+            )
+        else:
+            self.metrics_df = pd.DataFrame()
+
+        strategy_rows = []
+        for name, result in self.strategies.items():
+            weights_values = list(result.weights.values()) if result.weights else []
+            strategy_rows.append({
                 "strategy": name,
                 "method": result.method,
-                "num_assets": len([w for w in result.weights.values() if w > 0.001]),
-                "max_weight": max(result.weights.values()),
+                "num_assets": len([w for w in weights_values if w > 0.001]),
+                "max_weight": max(weights_values) if weights_values else 0.0,
                 "turnover": result.diagnostics.get("turnover", 0.0),
                 "transaction_cost": result.diagnostics.get("estimated_transaction_cost_usd", 0.0),
                 "tracking_error_target": result.diagnostics.get("tracking_error_target", np.nan),
                 "ex_ante_tracking_error": result.diagnostics.get("ex_ante_tracking_error", np.nan),
-            }
-            for name, result in self.strategies.items()
-        ])
+            })
 
+        self.strategy_df = pd.DataFrame(strategy_rows)
         return self.metrics_df
 
     def best_strategy_name(self) -> str:
         if self.metrics_df.empty:
             raise ValueError("Engine has not been run yet.")
-        return self.metrics_df.index[0]
+        return str(self.metrics_df.index[0])
 
     def tracking_error_strategy_name(self) -> str:
         for strategy_name, strategy_obj in self.strategies.items():
@@ -208,12 +227,13 @@ class ProfessionalPortfolioEngine:
             "Sharp Selloff Only": "Sharp_Selloff",
         }
 
-        if quick_view in quick_view_map:
+        if quick_view in quick_view_map and "family" in out.columns:
             out = out[out["family"] == quick_view_map[quick_view]]
 
-        if selected_family != "All":
+        if selected_family != "All" and "family" in out.columns:
             out = out[out["family"] == selected_family]
 
-        out = out[out["severity_score"] >= min_severity]
+        if "severity_score" in out.columns:
+            out = out[out["severity_score"] >= min_severity]
 
         return out.reset_index(drop=True)
