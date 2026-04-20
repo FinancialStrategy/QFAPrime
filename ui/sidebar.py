@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 import streamlit as st
 
 from core.config import ProfessionalConfig
-from core.universes import get_available_regions
+from core.universes import get_available_regions, get_universe_metadata
 
 
 def render_sidebar() -> ProfessionalConfig:
@@ -84,6 +84,73 @@ def render_sidebar() -> ProfessionalConfig:
     )
 
     return config
+
+
+def render_black_litterman_controls(config: ProfessionalConfig) -> Dict[str, Any]:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Black-Litterman Controls")
+
+    enable_bl_views = st.sidebar.checkbox("Enable Custom BL Views", value=False)
+    view_mode = st.sidebar.selectbox("View Scope", ["region", "ticker"], index=0)
+
+    views_payload: List[Dict[str, Any]] = []
+
+    if enable_bl_views:
+        max_views = 5
+        num_views = st.sidebar.slider("Number of Views", min_value=1, max_value=max_views, value=2, step=1)
+
+        if view_mode == "region":
+            candidates = sorted(
+                list(
+                    {
+                        row["region_type"]
+                        for row in get_universe_metadata(config.selected_universe, "All")
+                    }
+                )
+            )
+        else:
+            candidates = sorted(
+                [row["ticker"] for row in get_universe_metadata(config.selected_universe, config.selected_region)]
+            )
+
+        for i in range(num_views):
+            st.sidebar.markdown(f"**View {i+1}**")
+            target = st.sidebar.selectbox(
+                f"Target {i+1}",
+                candidates,
+                index=min(i, len(candidates) - 1) if candidates else 0,
+                key=f"bl_target_{i}",
+            )
+            expected_return = st.sidebar.slider(
+                f"Expected Annual Return {i+1}",
+                min_value=-0.10,
+                max_value=0.20,
+                value=0.06,
+                step=0.01,
+                key=f"bl_return_{i}",
+            )
+            confidence = st.sidebar.slider(
+                f"Confidence {i+1}",
+                min_value=0.05,
+                max_value=1.00,
+                value=0.60,
+                step=0.05,
+                key=f"bl_confidence_{i}",
+            )
+
+            views_payload.append(
+                {
+                    "target": target,
+                    "expected_return": expected_return,
+                    "confidence": confidence,
+                }
+            )
+
+    return {
+        "enabled": enable_bl_views,
+        "view_mode": view_mode,
+        "views_payload": views_payload,
+    }
 
 
 def render_run_controls() -> bool:
