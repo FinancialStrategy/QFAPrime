@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (GÜNCELLENDİ – DAHA DERİN KART, KÜÇÜK FONT)
+# STYLING (GÜNCELLENDİ – BAŞLIK SATIR SIĞMASI İÇİN)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -55,42 +55,49 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
-    /* DAHA DERİN KART */
+    /* DAHA DAR PADDING, KELİME KAYDIRMA */
     .hero-shell {
         width: 100%;
         background: #ffffff;
         border: 1px solid #dbe3ec;
         border-radius: 16px;
-        padding: 22px 24px 20px 24px;
+        padding: 16px 18px 14px 18px;  /* padding azaltıldı */
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
-        overflow: visible;
+        overflow-x: auto;
+        overflow-y: visible;
     }
 
-    /* KÜÇÜLTÜLMÜŞ BAŞLIK */
+    /* BAŞLIK – KÜÇÜLTÜLMÜŞ FONT, KELİME KAYDIRMA */
     .hero-title {
         display: block;
         width: 100%;
-        font-size: 1.4rem !important;
+        font-size: 1.2rem !important;
         font-weight: 700;
-        line-height: 1.3;
+        line-height: 1.25;
         color: #0f172a;
         text-align: left;
         margin: 0;
         padding: 0;
         letter-spacing: -0.01em;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        white-space: normal;
     }
 
-    /* KÜÇÜLTÜLMÜŞ ALT BAŞLIK */
+    /* ALT BAŞLIK – KÜÇÜLTÜLMÜŞ */
     .hero-subtitle {
         display: block;
         width: 100%;
-        font-size: 0.9rem !important;
+        font-size: 0.8rem !important;
         font-weight: 500;
-        line-height: 1.4;
+        line-height: 1.35;
         color: #475569;
         text-align: left;
-        margin-top: 0.5rem;
+        margin-top: 0.4rem;
         padding: 0;
+        word-break: break-word;
+        overflow-wrap: break-word;
+        white-space: normal;
     }
 
     .kpi-card {
@@ -136,7 +143,7 @@ CUSTOM_CSS = """
         font-size: 0.72rem;
     }
 
-    /* MOBİL UYUM */
+    /* MOBİL UYUM – DAHA KÜÇÜK FONT */
     @media (max-width: 1100px) {
         .block-container {
             padding-left: 1.2rem !important;
@@ -144,15 +151,15 @@ CUSTOM_CSS = """
         }
 
         .hero-shell {
-            padding: 18px 20px 16px 20px;
+            padding: 14px 16px 12px 16px;
         }
 
         .hero-title {
-            font-size: 1.2rem !important;
+            font-size: 1.0rem !important;
         }
 
         .hero-subtitle {
-            font-size: 0.8rem !important;
+            font-size: 0.7rem !important;
         }
     }
 </style>
