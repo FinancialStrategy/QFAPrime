@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (GÜNCELLENDİ – BAŞLIK SATIR SIĞMASI İÇİN)
+# STYLING (GÜNCELLENDİ – YAZILARI AŞAĞI ÇEKMEK İÇİN)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -55,27 +55,26 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
-    /* KARTI BÜYÜTÜYORUZ – YAZILAR AŞAĞI İNSİN */
+    /* KART – ÜST PADDING ARTIRILDI (YAZILARI AŞAĞI ÇEKMEK İÇİN) */
     .hero-shell {
         width: 100%;
         background: #ffffff;
         border: 1px solid #dbe3ec;
         border-radius: 16px;
-        padding: 28px 24px 28px 24px;  /* Üst ve alt padding artırıldı */
+        padding: 32px 24px 24px 24px;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
     }
 
-    /* BAŞLIK – SATIR KAYDIRMA ZORUNLU, BÜYÜK PADDING İLE ALTTA BAŞLASIN */
     .hero-title {
         display: block;
         width: 100%;
-        font-size: 1.3rem !important;
+        font-size: 1.4rem !important;
         font-weight: 700;
-        line-height: 1.35;
+        line-height: 1.3;
         color: #0f172a;
         text-align: left;
-        margin: 0 0 8px 0;  /* alt boşluk eklendi */
+        margin: 0 0 10px 0;
         padding: 0;
         letter-spacing: -0.01em;
         word-break: break-word;
@@ -83,16 +82,15 @@ CUSTOM_CSS = """
         white-space: normal;
     }
 
-    /* ALT BAŞLIK – AYNI ŞEKİLDE */
     .hero-subtitle {
         display: block;
         width: 100%;
-        font-size: 0.9rem !important;
+        font-size: 1rem !important;
         font-weight: 500;
         line-height: 1.4;
         color: #475569;
         text-align: left;
-        margin-top: 0.3rem;
+        margin-top: 0.5rem;
         padding: 0;
         word-break: break-word;
         overflow-wrap: break-word;
@@ -142,7 +140,6 @@ CUSTOM_CSS = """
         font-size: 0.72rem;
     }
 
-    /* MOBİL UYUM */
     @media (max-width: 1100px) {
         .block-container {
             padding-left: 1.2rem !important;
@@ -150,18 +147,20 @@ CUSTOM_CSS = """
         }
 
         .hero-shell {
-            padding: 20px 18px 20px 18px;
+            padding: 24px 18px 18px 18px;
         }
 
         .hero-title {
-            font-size: 1.1rem !important;
+            font-size: 1.2rem !important;
         }
 
         .hero-subtitle {
-            font-size: 0.8rem !important;
+            font-size: 0.85rem !important;
         }
     }
 </style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =========================================================
