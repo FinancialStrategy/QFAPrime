@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (GÜNCELLENDİ – YAZILARI AŞAĞI ÇEKMEK İÇİN)
+# STYLING (BAŞLIK ÇERÇEVEDEN ÇOK UZAK)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -55,13 +55,13 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
-    /* KART – ÜST PADDING ARTIRILDI (YAZILARI AŞAĞI ÇEKMEK İÇİN) */
+    /* KART – ÜST PADDING ÇOK BÜYÜK (BAŞLIK ÇERÇEVEDEN UZAK) */
     .hero-shell {
         width: 100%;
         background: #ffffff;
-        border: 1px solid #dbe3ec;
+        border: 2px solid #cbd5e1;
         border-radius: 16px;
-        padding: 20px 24px 20px 24px; /* Üst padding 20px yapıldı */
+        padding: 80px 24px 40px 24px;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
     }
@@ -69,12 +69,12 @@ CUSTOM_CSS = """
     .hero-title {
         display: block;
         width: 100%;
-        font-size: 1.4rem !important;
+        font-size: 1.6rem !important;
         font-weight: 700;
         line-height: 1.3;
         color: #0f172a;
         text-align: left;
-        margin: 0 0 8px 0;
+        margin: 0 0 16px 0;
         padding: 0;
         letter-spacing: -0.01em;
         word-break: break-word;
@@ -90,7 +90,7 @@ CUSTOM_CSS = """
         line-height: 1.4;
         color: #475569;
         text-align: left;
-        margin-top: 0.25rem;
+        margin-top: 0.5rem;
         padding: 0;
         word-break: break-word;
         overflow-wrap: break-word;
@@ -140,6 +140,7 @@ CUSTOM_CSS = """
         font-size: 0.72rem;
     }
 
+    /* MOBİL UYUM */
     @media (max-width: 1100px) {
         .block-container {
             padding-left: 1.2rem !important;
@@ -147,11 +148,11 @@ CUSTOM_CSS = """
         }
 
         .hero-shell {
-            padding: 24px 18px 18px 18px;
+            padding: 50px 18px 30px 18px;
         }
 
         .hero-title {
-            font-size: 1.2rem !important;
+            font-size: 1.3rem !important;
         }
 
         .hero-subtitle {
