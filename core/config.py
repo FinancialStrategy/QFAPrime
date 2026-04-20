@@ -9,6 +9,7 @@ class RunDiagnostics:
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     info: Dict[str, Any] = field(default_factory=dict)
+    strategy_diagnostics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def add_warning(self, message: str) -> None:
         if message:
@@ -21,17 +22,30 @@ class RunDiagnostics:
     def add_info(self, key: str, value: Any) -> None:
         self.info[str(key)] = value
 
+    def add_strategy_info(self, strategy_name: str, key: str, value: Any) -> None:
+        strategy_name = str(strategy_name)
+        key = str(key)
+
+        if strategy_name not in self.strategy_diagnostics:
+            self.strategy_diagnostics[strategy_name] = {}
+
+        self.strategy_diagnostics[strategy_name][key] = value
+
+    def get_strategy_info(self, strategy_name: str) -> Dict[str, Any]:
+        return self.strategy_diagnostics.get(str(strategy_name), {})
+
     def summary(self) -> Dict[str, Any]:
         return {
             "warnings": self.warnings,
             "errors": self.errors,
             "info": self.info,
+            "strategy_diagnostics": self.strategy_diagnostics,
         }
 
 
 @dataclass
 class ProfessionalConfig:
-    app_title: str = "Professional Portfolio Analytics"
+    app_title: str = "Multi-Asset Portfolio Analytics"
 
     risk_free_rate: float = 0.03
     trading_days: int = 252
@@ -59,7 +73,7 @@ class ProfessionalConfig:
 
     output_dir: str = "outputs"
     report_dir: str = "reports"
-    chart_height: int = 550
+    chart_height: int = 520
     chart_width: Optional[int] = None
 
     default_symbols: List[str] = field(default_factory=lambda: [
@@ -88,6 +102,7 @@ class ProfessionalConfig:
     def __post_init__(self) -> None:
         if self.trading_days <= 0:
             self.trading_days = 252
+
         self.annual_trading_days = int(self.trading_days)
 
         cleaned_levels = []
