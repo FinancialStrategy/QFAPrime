@@ -5,6 +5,8 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 from core.config import ProfessionalConfig
 
@@ -149,10 +151,6 @@ class AnalyticsEngine:
         benchmark_ticker: str,
         asset_metadata: pd.DataFrame,
     ) -> pd.DataFrame:
-        """
-        Approximate active risk contribution by region using long-only portfolio weights
-        and benchmark proxy concentrated in benchmark_ticker when present.
-        """
         if asset_returns.empty:
             return pd.DataFrame()
 
@@ -200,6 +198,59 @@ class AnalyticsEngine:
 
         region_df = region_df.sort_values("pct_active_risk_contribution", ascending=False)
         return region_df
+
+    def pca_factor_analysis(
+        self,
+        returns: pd.DataFrame,
+        n_components: int = 5,
+    ) -> Dict[str, Any]:
+        clean = returns.dropna(axis=1, how="any").copy()
+        if clean.shape[1] < 2 or clean.shape[0] < 20:
+            return {
+                "explained_variance_ratio": pd.Series(dtype=float),
+                "loadings": pd.DataFrame(),
+                "scores": pd.DataFrame(),
+                "interpretation": {},
+            }
+
+        n_components = min(n_components, clean.shape[1])
+
+        scaler = StandardScaler()
+        x_scaled = scaler.fit_transform(clean.values)
+
+        pca = PCA(n_components=n_components)
+        scores = pca.fit_transform(x_scaled)
+
+        pcs = [f"PC{i+1}" for i in range(n_components)]
+        loadings = pd.DataFrame(
+            pca.components_.T,
+            index=clean.columns,
+            columns=pcs,
+        )
+        scores_df = pd.DataFrame(
+            scores,
+            index=clean.index,
+            columns=pcs,
+        )
+        evr = pd.Series(pca.explained_variance_ratio_, index=pcs, name="explained_variance_ratio")
+
+        interpretation = {}
+        for pc in pcs[:3]:
+            col = loadings[pc]
+            same_sign_ratio = max((col > 0).mean(), (col < 0).mean())
+
+            if same_sign_ratio > 0.75:
+                interpretation[pc] = "Broad market factor: most assets move in the same direction."
+            else:
+                top_abs = col.abs().sort_values(ascending=False).head(5).index.tolist()
+                interpretation[pc] = f"Differentiation factor: strongest loadings include {', '.join(top_abs)}."
+
+        return {
+            "explained_variance_ratio": evr,
+            "loadings": loadings,
+            "scores": scores_df,
+            "interpretation": interpretation,
+        }
 
     def risk_contribution_table(
         self,
