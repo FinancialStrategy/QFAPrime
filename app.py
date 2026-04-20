@@ -1,66 +1,250 @@
 from __future__ import annotations
-        ["ema_historical", "historical_mean", "capm"],
-        index=0,
-    )
 
-    turnover_penalty = st.slider("Turnover Penalty", min_value=0.000, max_value=0.050, value=0.005, step=0.001)
-    transaction_cost_bps = st.slider("Transaction Cost (bps)", min_value=0.0, max_value=50.0, value=10.0, step=1.0)
-    tracking_error_target = st.slider("Tracking Error Target", min_value=0.01, max_value=0.20, value=0.06, step=0.01)
+import streamlit as st
 
-    run_data_preview = st.button("Load Foundation Data", type="primary")
+from core.engine import ProfessionalPortfolioEngine
+from ui.sidebar import render_sidebar, render_run_controls
+from ui.kpis import render_full_kpi_panel
+from ui.tables import (
+    show_asset_metadata_table,
+    show_data_quality_table,
+    show_metrics_table,
+    show_strategy_table,
+)
+from ui.charts import StreamlitChartBuilder
+from ui.theme import apply_theme
 
 
-config = ProfessionalConfig(
-    selected_universe=selected_universe,
-    selected_region=selected_region,
-    benchmark=benchmark,
-    lookback_years=lookback_years,
-    risk_free_rate=risk_free_rate,
-    min_weight=min_weight,
-    max_weight=max_weight,
-    max_category_weight=max_category_weight,
-    covariance_method=covariance_method,
-    expected_return_method=expected_return_method,
-    turnover_penalty=turnover_penalty,
-    transaction_cost_bps=transaction_cost_bps,
-    tracking_error_target=tracking_error_target,
+# ============================================================
+# STREAMLIT PAGE CONFIG
+# ============================================================
+st.set_page_config(
+    page_title="QFA Professional Quant Platform",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-diagnostics = RunDiagnostics()
+apply_theme()
 
-if run_data_preview:
-    try:
-        data = ProfessionalDataManager(config, diagnostics)
-        data.load()
+st.title("QFA Professional Quant Platform")
+st.caption("Institutional modular Streamlit application")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Universe", config.selected_universe)
-        col2.metric("Region", config.selected_region)
-        col3.metric("Assets Loaded", len(data.asset_returns.columns))
-        col4.metric("Benchmark", diagnostics.benchmark_used or config.benchmark)
+# ============================================================
+# SIDEBAR CONFIG
+# ============================================================
+config = render_sidebar()
+run_clicked = render_run_controls()
 
-        st.subheader("Investment Universe Metadata")
-        st.dataframe(data.asset_metadata, use_container_width=True)
+# ============================================================
+# SESSION STATE
+# ============================================================
+if "engine" not in st.session_state:
+    st.session_state["engine"] = None
 
-        st.subheader("Data Quality")
-        st.dataframe(data.data_quality, use_container_width=True)
+if "last_run_config" not in st.session_state:
+    st.session_state["last_run_config"] = None
 
-        st.subheader("Asset Price Sample")
-        st.dataframe(data.asset_prices.tail(10), use_container_width=True)
 
-        st.subheader("Asset Return Sample")
-        st.dataframe(data.asset_returns.tail(10), use_container_width=True)
+# ============================================================
+# ENGINE EXECUTION
+# ============================================================
+def _run_engine() -> None:
+    engine = ProfessionalPortfolioEngine(config)
+    engine.run()
+    st.session_state["engine"] = engine
+    st.session_state["last_run_config"] = {
+        "selected_universe": config.selected_universe,
+        "selected_region": config.selected_region,
+        "benchmark": config.benchmark,
+        "lookback_years": config.lookback_years,
+        "risk_free_rate": config.risk_free_rate,
+        "min_weight": config.min_weight,
+        "max_weight": config.max_weight,
+        "max_category_weight": config.max_category_weight,
+        "covariance_method": config.covariance_method,
+        "expected_return_method": config.expected_return_method,
+        "turnover_penalty": config.turnover_penalty,
+        "transaction_cost_bps": config.transaction_cost_bps,
+        "tracking_error_target": config.tracking_error_target,
+        "initial_capital": config.initial_capital,
+    }
 
-        if diagnostics.dropped_assets:
-            st.subheader("Dropped Assets")
-            dropped_df = pd.DataFrame(
-                [{"ticker": k, "reason": v} for k, v in diagnostics.dropped_assets.items()]
-            )
-            st.dataframe(dropped_df, use_container_width=True)
 
-    except Exception as exc:
-        st.error(f"Foundation load failed: {exc}")
-else:
+if run_clicked:
+    with st.spinner("Running institutional analysis..."):
+        try:
+            _run_engine()
+            st.success("Analysis completed successfully.")
+        except Exception as exc:
+            st.session_state["engine"] = None
+            st.error(f"Run failed: {exc}")
+
+
+# ============================================================
+# MAIN LANDING PAGE CONTENT
+# ============================================================
+engine = st.session_state["engine"]
+
+if engine is None:
     st.info(
-        "This is the foundation stage of the Streamlit migration. Use the sidebar to choose the universe and load the data preview."
+        "Set your controls in the sidebar and click "
+        "**Run Institutional Analysis** to build the full platform outputs."
     )
+
+    st.markdown("### Platform Scope")
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(
+        """
+        **Universe Layer**
+        - Institutional Multi-Asset
+        - Global Major Stock Indices
+        - Regional filtering
+        """
+    )
+    c2.markdown(
+        """
+        **Optimization Layer**
+        - Max Sharpe
+        - Min Volatility
+        - ERC / HRP
+        - Black-Litterman
+        - Tracking Error Optimal
+        """
+    )
+    c3.markdown(
+        """
+        **Risk Layer**
+        - VaR / CVaR / Relative VaR
+        - Stress testing
+        - Monte Carlo
+        - Tracking error analytics
+        """
+    )
+
+    st.markdown("### Current Configuration Preview")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Universe", config.selected_universe)
+    p2.metric("Region", config.selected_region)
+    p3.metric("Benchmark", config.benchmark)
+    p4.metric("Lookback Years", config.lookback_years)
+
+else:
+    chart_builder = StreamlitChartBuilder(engine.config)
+    best_strategy = engine.best_strategy_name()
+    best_metrics = engine.metrics[best_strategy]
+    tracking_strategy = engine.tracking_error_strategy_name()
+    tracking_metrics = engine.metrics[tracking_strategy]
+
+    # ========================================================
+    # TOP KPI PANEL
+    # ========================================================
+    render_full_kpi_panel(
+        best_strategy,
+        best_metrics,
+        engine.config.initial_capital,
+    )
+
+    st.markdown("### Platform Overview")
+
+    # ========================================================
+    # OVERVIEW TABS
+    # ========================================================
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        [
+            "Executive Snapshot",
+            "Universe Preview",
+            "Optimization Snapshot",
+            "Tracking Error Snapshot",
+            "Tables",
+        ]
+    )
+
+    with tab1:
+        st.plotly_chart(
+            chart_builder.performance_dashboard(engine.metrics_df),
+            use_container_width=True,
+        )
+        st.plotly_chart(
+            chart_builder.equity_curve_chart(
+                best_metrics["portfolio_values"],
+                best_metrics["benchmark_values"],
+                best_strategy,
+            ),
+            use_container_width=True,
+        )
+        st.plotly_chart(
+            chart_builder.drawdown_chart(
+                best_metrics["drawdown_series"],
+                best_strategy,
+            ),
+            use_container_width=True,
+        )
+
+    with tab2:
+        st.plotly_chart(
+            chart_builder.info_hub_table(engine.data.asset_metadata),
+            use_container_width=True,
+        )
+
+    with tab3:
+        st.plotly_chart(
+            chart_builder.optimization_chart(
+                engine.mu,
+                engine.cov,
+                engine.strategies,
+                engine.config.risk_free_rate,
+            ),
+            use_container_width=True,
+        )
+        st.plotly_chart(
+            chart_builder.allocation_chart(engine.strategies[best_strategy].weights),
+            use_container_width=True,
+        )
+
+    with tab4:
+        st.plotly_chart(
+            chart_builder.tracking_error_chart(engine.metrics_df),
+            use_container_width=True,
+        )
+        st.plotly_chart(
+            chart_builder.benchmark_vs_tracking_error_curve(
+                tracking_metrics["portfolio_returns"],
+                tracking_metrics["benchmark_returns"],
+                tracking_strategy,
+            ),
+            use_container_width=True,
+        )
+
+    with tab5:
+        show_metrics_table(engine.metrics_df)
+        show_strategy_table(engine.strategy_df)
+        show_asset_metadata_table(engine.data.asset_metadata)
+        show_data_quality_table(engine.data.data_quality)
+
+    # ========================================================
+    # RUN SUMMARY
+    # ========================================================
+    st.markdown("### Run Summary")
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Assets Loaded", len(engine.data.asset_returns.columns))
+    s2.metric("Strategies Built", len(engine.strategies))
+    s3.metric("Benchmark Used", engine.diagnostics.benchmark_used or engine.config.benchmark)
+    s4.metric("Covariance Method", engine.diagnostics.covariance_method_used or engine.config.covariance_method)
+
+    if engine.diagnostics.dropped_assets:
+        with st.expander("Dropped Assets"):
+            dropped_rows = [
+                {"ticker": ticker, "reason": reason}
+                for ticker, reason in engine.diagnostics.dropped_assets.items()
+            ]
+            st.dataframe(dropped_rows, use_container_width=True)
+
+    with st.expander("Diagnostics"):
+        st.write(
+            {
+                "benchmark_used": engine.diagnostics.benchmark_used,
+                "covariance_method_used": engine.diagnostics.covariance_method_used,
+                "expected_return_method_used": engine.diagnostics.expected_return_method_used,
+                "covariance_repaired": engine.diagnostics.covariance_repaired,
+            }
+        )
