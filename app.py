@@ -16,7 +16,7 @@ from core.universes import UNIVERSE_REGISTRY
 # PAGE CONFIG
 # =========================================================
 st.set_page_config(
-    page_title="Multi-Asset Portfolio Analytics",
+    page_title="QFA Prime Finance Platform",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -29,16 +29,16 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .main > div {
-        padding-top: 0.15rem;
+        padding-top: 0.10rem;
     }
 
     .block-container {
-        padding-top: 0.25rem;
-        padding-bottom: 1.2rem;
         max-width: 100% !important;
         width: 100% !important;
-        padding-left: 1.2rem !important;
-        padding-right: 1.2rem !important;
+        padding-top: 0.20rem !important;
+        padding-left: 2.2rem !important;
+        padding-right: 2.2rem !important;
+        padding-bottom: 1.2rem !important;
     }
 
     section.main > div {
@@ -49,36 +49,55 @@ CUSTOM_CSS = """
         max-width: 100% !important;
     }
 
-    .hero-shell {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 8px 14px 8px 14px;
-        margin: 0 0 0.65rem 0;
-        box-shadow: 0 1px 6px rgba(15, 23, 42, 0.04);
+    .hero-outer {
         width: 100%;
+        display: block;
+        margin: 0 0 0.75rem 0;
+    }
+
+    .hero-shell {
+        width: 100%;
+        background: #ffffff;
+        border: 1px solid #dbe3ec;
+        border-radius: 12px;
+        padding: 14px 18px 12px 18px;
+        box-shadow: 0 1px 8px rgba(15, 23, 42, 0.05);
+        overflow: visible;
     }
 
     .hero-title {
-        font-size: 0.96rem;
+        display: block;
+        width: 100%;
+        font-size: 1.18rem;
         font-weight: 800;
-        line-height: 1.2;
+        line-height: 1.28;
         color: #0f172a;
+        text-align: left;
         margin: 0;
+        padding: 0;
         white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        word-break: normal;
         overflow-wrap: anywhere;
-        word-break: break-word;
+        letter-spacing: 0.00em;
     }
 
     .hero-subtitle {
-        font-size: 0.70rem;
+        display: block;
+        width: 100%;
+        font-size: 0.82rem;
+        font-weight: 500;
+        line-height: 1.38;
         color: #475569;
-        margin-top: 0.16rem;
-        line-height: 1.25;
-        max-width: 100%;
+        text-align: left;
+        margin-top: 0.28rem;
+        padding: 0;
         white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        word-break: normal;
         overflow-wrap: anywhere;
-        word-break: break-word;
     }
 
     .kpi-card {
@@ -124,13 +143,18 @@ CUSTOM_CSS = """
         font-size: 0.72rem;
     }
 
-    @media (max-width: 900px) {
+    @media (max-width: 1100px) {
+        .block-container {
+            padding-left: 1.2rem !important;
+            padding-right: 1.2rem !important;
+        }
+
         .hero-title {
-            font-size: 0.88rem;
+            font-size: 1.02rem;
         }
 
         .hero-subtitle {
-            font-size: 0.68rem;
+            font-size: 0.76rem;
         }
     }
 </style>
@@ -471,10 +495,12 @@ with st.sidebar:
 # =========================================================
 st.markdown(
     """
-    <div class="hero-shell">
-        <div class="hero-title">Multi-Asset Portfolio Analytics</div>
-        <div class="hero-subtitle">
-            Risk diagnostics, stress testing, and factor analysis
+    <div class="hero-outer">
+        <div class="hero-shell">
+            <div class="hero-title">QFA Prime Finance Platform</div>
+            <div class="hero-subtitle">
+                Institutional portfolio analytics, risk diagnostics, stress testing, and factor intelligence
+            </div>
         </div>
     </div>
     """,
