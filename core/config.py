@@ -1,67 +1,57 @@
-# `core/config.py`
-
-```python
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Tuple
-
-import pandas as pd
+from typing import Dict, List, Optional
 
 
 @dataclass
 class ProfessionalConfig:
-    initial_capital: float = 10_000_000.0
-    annual_trading_days: int = 252
-    benchmark: str = "SPY"
-    as_of_date: str = field(
-        default_factory=lambda: (pd.Timestamp.today().normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    )
-    lookback_years: int = 6
-    risk_free_rate: float = 0.0425
-
-    min_weight: float = 0.00
-    max_weight: float = 0.20
-    max_category_weight: float = 0.35
+    app_title: str = "Professional Portfolio Analytics"
+    risk_free_rate: float = 0.03
+    trading_days: int = 252
+    benchmark_symbol: str = "^GSPC"
+    cash_symbol: str = "BIL"
+    default_start_date: str = "2019-01-01"
+    min_observations: int = 60
+    rolling_window: int = 63
+    ewma_lambda: float = 0.94
+    confidence_level: float = 0.95
+    use_log_returns: bool = False
     allow_short: bool = False
+    max_assets: int = 30
 
-    covariance_method: str = "ledoit_wolf"  # ledoit_wolf, sample, shrinkage
-    expected_return_method: str = "ema_historical"  # ema_historical, historical_mean, capm
-    confidence_levels: Tuple[float, ...] = (0.90, 0.95, 0.99)
+    default_symbols: List[str] = field(default_factory=lambda: [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"
+    ])
 
-    turnover_penalty: float = 0.005
-    transaction_cost_bps: float = 10.0
-    tracking_error_target: float = 0.06
+    benchmark_map: Dict[str, str] = field(default_factory=lambda: {
+        "US Equities": "^GSPC",
+        "Gold": "GLD",
+        "Turkey": "XU100.IS",
+        "World": "URTH"
+    })
 
-    data_timeout_seconds: int = 30
-    report_file: str = field(
-        default_factory=lambda: f"qfa_professional_quant_platform_{datetime.today().strftime('%Y%m%d_%H%M')}.html"
-    )
+    scenario_families: List[str] = field(default_factory=lambda: [
+        "crisis",
+        "inflation",
+        "banking_stress",
+        "sharp_rally",
+        "sharp_selloff"
+    ])
 
-    selected_universe: str = "Institutional Multi-Asset"
-    selected_region: str = "All"
+    output_dir: str = "outputs"
+    report_dir: str = "reports"
+    chart_height: int = 550
+    chart_width: Optional[int] = None
 
-    @property
-    def start_date(self) -> str:
-        return (pd.Timestamp(self.as_of_date) - pd.DateOffset(years=self.lookback_years)).strftime("%Y-%m-%d")
-
-    @property
-    def end_date(self) -> str:
-        return self.as_of_date
-
-
-@dataclass
-class RunDiagnostics:
-    dropped_assets: Dict[str, str] = field(default_factory=dict)
-    info: List[str] = field(default_factory=list)
-    benchmark_used: str | None = None
-    covariance_repaired: bool = False
-    covariance_method_used: str | None = None
-    expected_return_method_used: str | None = None
-    strategy_diagnostics: Dict[str, Dict] = field(default_factory=dict)
-
-    def add_info(self, message: str) -> None:
-        self.info.append(message)
-```
-
+    def validate(self) -> None:
+        if not 0 <= self.risk_free_rate <= 1:
+            raise ValueError("risk_free_rate must be between 0 and 1.")
+        if self.trading_days <= 0:
+            raise ValueError("trading_days must be positive.")
+        if self.min_observations < 20:
+            raise ValueError("min_observations must be at least 20.")
+        if self.rolling_window < 20:
+            raise ValueError("rolling_window must be at least 20.")
+        if not 0 < self.confidence_level < 1:
+            raise ValueError("confidence_level must be between 0 and 1.")
+        if not 0 < self.ewma_lambda < 1:
+            raise ValueError("ewma_lambda must be between 0 and 1.")
