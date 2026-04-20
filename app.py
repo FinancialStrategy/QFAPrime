@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (ÜST ÇİZGİ BELİRGİN)
+# STYLING (ÜST ÇİZGİ pseudo-element ile KESİN ÇÖZÜM)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -55,16 +55,27 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
-    /* KART – ÜST ÇİZGİ BELİRGİN */
     .hero-shell {
+        position: relative;
         width: 100%;
         background: #ffffff;
-        border: 2px solid #cbd5e1;        /* Tüm kenarlar belirgin */
-        border-top: 3px solid #e74c3c;     /* Üst çizgi kırmızı (isteğe bağlı) */
+        border: 1px solid #e5e7eb;
         border-radius: 16px;
         padding: 80px 24px 40px 24px;
-        box-shadow: 0 -2px 0 #cbd5e1, 0 2px 12px rgba(0, 0, 0, 0.04);
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
+    }
+
+    /* KESİN ÇÖZÜM: ÜST ÇİZGİ (pseudo-element) */
+    .hero-shell::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: #2E86AB;   /* İstediğiniz renk */
+        border-radius: 16px 16px 0 0;
     }
 
     .hero-title {
@@ -165,7 +176,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =========================================================
-# HELPERS (Aynen devam)
+# HELPERS
 # =========================================================
 def fmt_pct(x: Optional[float]) -> str:
     if x is None or pd.isna(x):
@@ -379,7 +390,7 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
 
 
 # =========================================================
-# SIDEBAR (Aynen devam)
+# SIDEBAR
 # =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
@@ -629,7 +640,7 @@ tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.t
 
 
 # =========================================================
-# OVERVIEW (Aynen devam)
+# OVERVIEW
 # =========================================================
 with tab_overview:
     st.markdown('<div class="section-label">Executive Summary</div>', unsafe_allow_html=True)
