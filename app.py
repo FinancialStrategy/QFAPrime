@@ -29,106 +29,108 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
     .main > div {
-        padding-top: 0.35rem;
+        padding-top: 0.15rem;
     }
 
     .block-container {
-        padding-top: 0.45rem;
-        padding-bottom: 1.5rem;
-        max-width: 94rem;
+        padding-top: 0.25rem;
+        padding-bottom: 1.2rem;
+        max-width: 100% !important;
+        width: 100% !important;
+        padding-left: 1.2rem !important;
+        padding-right: 1.2rem !important;
+    }
+
+    section.main > div {
+        max-width: 100% !important;
+    }
+
+    .stApp {
+        max-width: 100% !important;
     }
 
     .hero-shell {
         background: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 12px 16px 10px 16px;
-        margin: 0.05rem 0 0.8rem 0;
-        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
-    }
-
-    .hero-topline {
-        font-size: 0.62rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #64748b;
-        margin-bottom: 0.18rem;
-        line-height: 1.2;
+        border-radius: 10px;
+        padding: 8px 14px 8px 14px;
+        margin: 0 0 0.65rem 0;
+        box-shadow: 0 1px 6px rgba(15, 23, 42, 0.04);
+        width: 100%;
     }
 
     .hero-title {
-        font-size: 1.08rem;
+        font-size: 0.96rem;
         font-weight: 800;
-        line-height: 1.25;
+        line-height: 1.2;
         color: #0f172a;
         margin: 0;
         white-space: normal;
-        overflow-wrap: break-word;
-        word-break: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     .hero-subtitle {
-        font-size: 0.78rem;
+        font-size: 0.70rem;
         color: #475569;
-        margin-top: 0.22rem;
-        line-height: 1.35;
-        max-width: 900px;
+        margin-top: 0.16rem;
+        line-height: 1.25;
+        max-width: 100%;
         white-space: normal;
-        overflow-wrap: break-word;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     .kpi-card {
         background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
         border: 1px solid rgba(148, 163, 184, 0.18);
         border-radius: 12px;
-        padding: 14px 14px 12px 14px;
-        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.14);
-        min-height: 100px;
+        padding: 12px 12px 10px 12px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+        min-height: 94px;
     }
 
     .kpi-title {
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         color: #cbd5e1;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
         font-weight: 600;
-        letter-spacing: 0.01em;
-        line-height: 1.25;
+        line-height: 1.2;
     }
 
     .kpi-value {
-        font-size: 1.18rem;
+        font-size: 1.06rem;
         color: white;
         font-weight: 800;
-        line-height: 1.15;
+        line-height: 1.1;
     }
 
     .kpi-sub {
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         color: #94a3b8;
-        margin-top: 6px;
-        line-height: 1.25;
+        margin-top: 5px;
+        line-height: 1.2;
     }
 
     .section-label {
-        font-size: 0.95rem;
+        font-size: 0.90rem;
         font-weight: 800;
         color: #0f172a;
-        margin: 0.3rem 0 0.7rem 0;
+        margin: 0.25rem 0 0.6rem 0;
     }
 
     .small-note {
         color: #64748b;
-        font-size: 0.74rem;
+        font-size: 0.72rem;
     }
 
     @media (max-width: 900px) {
         .hero-title {
-            font-size: 0.96rem;
+            font-size: 0.88rem;
         }
 
         .hero-subtitle {
-            font-size: 0.74rem;
+            font-size: 0.68rem;
         }
     }
 </style>
@@ -470,7 +472,6 @@ with st.sidebar:
 st.markdown(
     """
     <div class="hero-shell">
-        <div class="hero-topline">Institutional Quantitative Platform</div>
         <div class="hero-title">Multi-Asset Portfolio Analytics</div>
         <div class="hero-subtitle">
             Risk diagnostics, stress testing, and factor analysis
