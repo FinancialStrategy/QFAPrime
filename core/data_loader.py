@@ -35,15 +35,12 @@ class ProfessionalDataManager:
         self.benchmark_returns: pd.Series = pd.Series(dtype=float)
         self.asset_metadata: pd.DataFrame = pd.DataFrame()
 
-    # =========================
-    # UNIVERSE HANDLING
-    # =========================
     def _build_metadata(self) -> pd.DataFrame:
         universe = get_universe_definition(self.config.selected_universe)
         flat = flatten_universe_dict(universe)
 
         rows: List[Dict] = []
-        for ticker, meta in flat.items():
+        for _, meta in flat.items():
             rows.append(meta)
 
         df = pd.DataFrame(rows)
@@ -61,58 +58,46 @@ class ProfessionalDataManager:
 
         return df.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
 
-    # =========================
-    # DOWNLOAD
-    # =========================
+    def _download_single_ticker(self, ticker: str) -> pd.Series:
+        try:
+            data = yf.download(
+                tickers=ticker,
+                start=self.config.default_start_date,
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            if data is None or data.empty:
+                self.diagnostics.add_warning(f"No data returned for {ticker}.")
+                return pd.Series(dtype=float, name=ticker)
+
+            if "Close" in data.columns:
+                s = data["Close"].copy()
+            else:
+                s = data.iloc[:, 0].copy()
+
+            s.name = ticker
+            return s
+        except Exception as e:
+            self.diagnostics.add_warning(f"Ticker download failed for {ticker}: {e}")
+            return pd.Series(dtype=float, name=ticker)
+
     def _download_prices(self, tickers: List[str]) -> pd.DataFrame:
         if not tickers:
             return pd.DataFrame()
 
-        try:
-            data = yf.download(
-                tickers=tickers,
-                start=self.config.default_start_date,
-                auto_adjust=True,
-                progress=False,
-                group_by="ticker",
-                threads=True,
-            )
-        except Exception as e:
-            self.diagnostics.add_error(f"Yahoo download failed: {e}")
+        series_list: List[pd.Series] = []
+        for ticker in tickers:
+            s = self._download_single_ticker(ticker)
+            if not s.empty:
+                series_list.append(s)
+
+        if not series_list:
             return pd.DataFrame()
 
-        if data is None or data.empty:
-            return pd.DataFrame()
-
-        # SINGLE TICKER
-        if len(tickers) == 1:
-            if "Close" in data.columns:
-                df = data[["Close"]].copy()
-                df.columns = tickers
-            else:
-                df = data.copy()
-            return df
-
-        # MULTI TICKER
-        if isinstance(data.columns, pd.MultiIndex):
-            if "Close" in data.columns.get_level_values(-1):
-                df = data.xs("Close", axis=1, level=-1)
-            else:
-                extracted = {}
-                for t in tickers:
-                    if t in data.columns.get_level_values(0):
-                        sub = data[t]
-                        if "Close" in sub.columns:
-                            extracted[t] = sub["Close"]
-                df = pd.DataFrame(extracted)
-        else:
-            df = data.copy()
-
+        df = pd.concat(series_list, axis=1)
         return df
 
-    # =========================
-    # CLEANING
-    # =========================
     def _clean_prices(self, df: pd.DataFrame) -> pd.DataFrame:
         if df.empty:
             return df
@@ -120,14 +105,15 @@ class ProfessionalDataManager:
         df = df.copy()
         df = df.loc[:, ~df.columns.duplicated()]
         df = df.sort_index()
-
         df = df.replace([np.inf, -np.inf], np.nan)
         df = df.ffill(limit=5)
         df = df.dropna(axis=0, how="all")
 
-        # min observation filter
         min_obs = max(30, self.config.min_observations)
         valid_cols = [c for c in df.columns if df[c].dropna().shape[0] >= min_obs]
+
+        if not valid_cols:
+            return pd.DataFrame(index=df.index)
 
         return df[valid_cols]
 
@@ -142,15 +128,10 @@ class ProfessionalDataManager:
 
         ret = ret.replace([np.inf, -np.inf], np.nan)
         ret = ret.dropna(how="all")
-
         return ret
 
-    # =========================
-    # MAIN LOAD
-    # =========================
     def load(self) -> DataLoadResult:
         metadata = self._build_metadata()
-
         tickers = metadata["ticker"].tolist()
 
         prices = self._download_prices(tickers)
@@ -159,39 +140,38 @@ class ProfessionalDataManager:
         if prices.empty:
             raise ValueError("No asset price data downloaded.")
 
-        # Benchmark
         bench_df = self._download_prices([self.config.benchmark_symbol])
         if bench_df.empty:
-            raise ValueError("Benchmark download failed.")
+            raise ValueError(f"Benchmark download failed for {self.config.benchmark_symbol}.")
 
-        benchmark_prices = bench_df.iloc[:, 0]
+        benchmark_prices = bench_df.iloc[:, 0].copy()
 
-        # ALIGN INDEX
         common_index = prices.index.intersection(benchmark_prices.index)
-        prices = prices.loc[common_index]
-        benchmark_prices = benchmark_prices.loc[common_index]
+        prices = prices.loc[common_index].copy()
+        benchmark_prices = benchmark_prices.loc[common_index].copy()
 
-        # RETURNS
         asset_returns = self._compute_returns(prices)
         benchmark_returns = self._compute_returns(
             benchmark_prices.to_frame(name=self.config.benchmark_symbol)
         )
         benchmark_returns = benchmark_returns.iloc[:, 0]
 
-        # ALIGN RETURNS
         common_idx = asset_returns.index.intersection(benchmark_returns.index)
-        asset_returns = asset_returns.loc[common_idx]
-        benchmark_returns = benchmark_returns.loc[common_idx]
+        asset_returns = asset_returns.loc[common_idx].copy()
+        benchmark_returns = benchmark_returns.loc[common_idx].copy()
 
-        # FINAL CLEAN
         asset_returns = asset_returns.dropna(axis=1, how="all")
         asset_returns = asset_returns.dropna(axis=0, how="all")
 
         valid_cols = asset_returns.columns.tolist()
-        prices = prices[valid_cols]
+        prices = prices[valid_cols].copy()
         metadata = metadata[metadata["ticker"].isin(valid_cols)].reset_index(drop=True)
 
-        # SAVE
+        if asset_returns.empty:
+            raise ValueError("Asset returns are empty after cleaning/alignment.")
+        if benchmark_returns.empty:
+            raise ValueError("Benchmark returns are empty after cleaning/alignment.")
+
         self.asset_prices = prices
         self.asset_returns = asset_returns
         self.benchmark_prices = benchmark_prices
@@ -200,6 +180,11 @@ class ProfessionalDataManager:
 
         self.diagnostics.add_info("num_assets", len(valid_cols))
         self.diagnostics.add_info("num_observations", len(asset_returns))
+        self.diagnostics.add_info("benchmark_symbol", self.config.benchmark_symbol)
+
+        dropped = sorted(set(tickers) - set(valid_cols))
+        if dropped:
+            self.diagnostics.add_warning(f"Dropped tickers after cleaning/download: {', '.join(dropped)}")
 
         return DataLoadResult(
             asset_prices=prices,
