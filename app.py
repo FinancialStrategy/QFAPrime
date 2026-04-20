@@ -3,7 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core.engine import ProfessionalPortfolioEngine
-from ui.sidebar import render_sidebar, render_run_controls
+from ui.sidebar import render_sidebar, render_run_controls, render_black_litterman_controls
 from ui.kpis import render_full_kpi_panel
 from ui.tables import (
     show_asset_metadata_table,
@@ -15,9 +15,6 @@ from ui.charts import StreamlitChartBuilder
 from ui.theme import apply_theme
 
 
-# ============================================================
-# STREAMLIT PAGE CONFIG
-# ============================================================
 st.set_page_config(
     page_title="QFA Professional Quant Platform",
     layout="wide",
@@ -29,15 +26,10 @@ apply_theme()
 st.title("QFA Professional Quant Platform")
 st.caption("Institutional modular Streamlit application")
 
-# ============================================================
-# SIDEBAR CONFIG
-# ============================================================
 config = render_sidebar()
+bl_controls = render_black_litterman_controls(config)
 run_clicked = render_run_controls()
 
-# ============================================================
-# SESSION STATE
-# ============================================================
 if "engine" not in st.session_state:
     st.session_state["engine"] = None
 
@@ -45,11 +37,8 @@ if "last_run_config" not in st.session_state:
     st.session_state["last_run_config"] = None
 
 
-# ============================================================
-# ENGINE EXECUTION
-# ============================================================
 def _run_engine() -> None:
-    engine = ProfessionalPortfolioEngine(config)
+    engine = ProfessionalPortfolioEngine(config=config, bl_controls=bl_controls)
     engine.run()
     st.session_state["engine"] = engine
     st.session_state["last_run_config"] = {
@@ -67,6 +56,7 @@ def _run_engine() -> None:
         "transaction_cost_bps": config.transaction_cost_bps,
         "tracking_error_target": config.tracking_error_target,
         "initial_capital": config.initial_capital,
+        "bl_controls": bl_controls,
     }
 
 
@@ -80,9 +70,6 @@ if run_clicked:
             st.error(f"Run failed: {exc}")
 
 
-# ============================================================
-# MAIN LANDING PAGE CONTENT
-# ============================================================
 engine = st.session_state["engine"]
 
 if engine is None:
@@ -106,9 +93,9 @@ if engine is None:
         **Optimization Layer**
         - Max Sharpe
         - Min Volatility
-        - ERC / HRP
+        - HRP / ERC
         - Black-Litterman
-        - Tracking Error Optimal
+        - Tracking Error Optimization
         """
     )
     c3.markdown(
@@ -116,6 +103,7 @@ if engine is None:
         **Risk Layer**
         - VaR / CVaR / Relative VaR
         - Stress testing
+        - Scenario families
         - Monte Carlo
         - Tracking error analytics
         """
@@ -128,6 +116,12 @@ if engine is None:
     p3.metric("Benchmark", config.benchmark)
     p4.metric("Lookback Years", config.lookback_years)
 
+    st.markdown("### Black-Litterman Preview")
+    b1, b2, b3 = st.columns(3)
+    b1.metric("BL Enabled", "Yes" if bl_controls.get("enabled") else "No")
+    b2.metric("BL View Mode", bl_controls.get("view_mode", "ticker"))
+    b3.metric("BL View Count", len(bl_controls.get("views_payload", [])))
+
 else:
     chart_builder = StreamlitChartBuilder(engine.config)
     best_strategy = engine.best_strategy_name()
@@ -135,9 +129,6 @@ else:
     tracking_strategy = engine.tracking_error_strategy_name()
     tracking_metrics = engine.metrics[tracking_strategy]
 
-    # ========================================================
-    # TOP KPI PANEL
-    # ========================================================
     render_full_kpi_panel(
         best_strategy,
         best_metrics,
@@ -146,9 +137,6 @@ else:
 
     st.markdown("### Platform Overview")
 
-    # ========================================================
-    # OVERVIEW TABS
-    # ========================================================
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         [
             "Executive Snapshot",
@@ -201,6 +189,20 @@ else:
             use_container_width=True,
         )
 
+        bl_strategy_name = None
+        for name, obj in engine.strategies.items():
+            if obj.method == "black_litterman":
+                bl_strategy_name = name
+                break
+
+        if bl_strategy_name is not None:
+            bl_diag = engine.strategies[bl_strategy_name].diagnostics
+            st.markdown("#### BL Snapshot")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("BL View Mode", bl_diag.get("bl_view_mode", "N/A"))
+            c2.metric("BL Views Used", len(bl_diag.get("views_used", {})))
+            c3.metric("BL Posterior Cov Trace", f"{bl_diag.get('posterior_covariance_trace', float('nan')):.4f}")
+
     with tab4:
         st.plotly_chart(
             chart_builder.tracking_error_chart(engine.metrics_df),
@@ -221,9 +223,6 @@ else:
         show_asset_metadata_table(engine.data.asset_metadata)
         show_data_quality_table(engine.data.data_quality)
 
-    # ========================================================
-    # RUN SUMMARY
-    # ========================================================
     st.markdown("### Run Summary")
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("Assets Loaded", len(engine.data.asset_returns.columns))
@@ -246,5 +245,6 @@ else:
                 "covariance_method_used": engine.diagnostics.covariance_method_used,
                 "expected_return_method_used": engine.diagnostics.expected_return_method_used,
                 "covariance_repaired": engine.diagnostics.covariance_repaired,
+                "bl_controls": bl_controls,
             }
         )
