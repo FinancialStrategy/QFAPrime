@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (GÜNCELLENMİŞ CSS – BAŞLIK BOYUTLARI BÜYÜTÜLDÜ)
+# STYLING (GÜNCELLENDİ – DAHA DERİN KART, KÜÇÜK FONT)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -156,72 +156,12 @@ CUSTOM_CSS = """
         }
     }
 </style>
-
-    .kpi-card {
-        background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 12px;
-        padding: 12px 12px 10px 12px;
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
-        min-height: 94px;
-    }
-
-    .kpi-title {
-        font-size: 0.68rem;
-        color: #cbd5e1;
-        margin-bottom: 6px;
-        font-weight: 600;
-        line-height: 1.2;
-    }
-
-    .kpi-value {
-        font-size: 1.06rem;
-        color: white;
-        font-weight: 800;
-        line-height: 1.1;
-    }
-
-    .kpi-sub {
-        font-size: 0.68rem;
-        color: #94a3b8;
-        margin-top: 5px;
-        line-height: 1.2;
-    }
-
-    .section-label {
-        font-size: 0.90rem;
-        font-weight: 800;
-        color: #0f172a;
-        margin: 0.25rem 0 0.6rem 0;
-    }
-
-    .small-note {
-        color: #64748b;
-        font-size: 0.72rem;
-    }
-
-    /* MOBİL UYUM – BAŞLIK BOYUTLARI DAHA BÜYÜK */
-    @media (max-width: 1100px) {
-        .block-container {
-            padding-left: 1.2rem !important;
-            padding-right: 1.2rem !important;
-        }
-
-        .hero-title {
-            font-size: 1.4rem !important;
-        }
-
-        .hero-subtitle {
-            font-size: 0.95rem !important;
-        }
-    }
-</style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =========================================================
-# HELPERS (Aynen korundu)
+# HELPERS
 # =========================================================
 def fmt_pct(x: Optional[float]) -> str:
     if x is None or pd.isna(x):
@@ -435,7 +375,7 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
 
 
 # =========================================================
-# SIDEBAR (Aynen korundu)
+# SIDEBAR
 # =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
@@ -549,7 +489,7 @@ with st.sidebar:
 
 
 # =========================================================
-# HEADER (GÜNCELLENMİŞ CSS İLE DAHA BÜYÜK GÖRÜNECEK)
+# HEADER
 # =========================================================
 st.markdown(
     """
@@ -577,7 +517,7 @@ if "engine_error" not in st.session_state:
 
 
 # =========================================================
-# ENGINE EXECUTION (Aynen korundu)
+# ENGINE EXECUTION
 # =========================================================
 if run_button or st.session_state.engine_result is None:
     try:
