@@ -17,7 +17,6 @@ from core.scenarios import (
     run_historical_stress_tests,
     run_hypothetical_shocks,
     detect_sharp_fluctuation_windows,
-    DEFAULT_HISTORICAL_SCENARIOS,
 )
 from core.universes import flatten_universe_dict, get_universe_definition
 
@@ -27,9 +26,15 @@ class ProfessionalPortfolioEngine:
         self,
         config: Optional[ProfessionalConfig] = None,
         bl_controls: Optional[Dict] = None,
+        scenario_controls: Optional[Dict] = None,
     ):
         self.config = config or ProfessionalConfig()
         self.bl_controls = bl_controls or {"enabled": False, "view_mode": "ticker", "views_payload": []}
+        self.scenario_controls = scenario_controls or {
+            "selected_family": "All",
+            "minimum_severity_threshold": 0.0,
+            "quick_view": "All",
+        }
         self.diagnostics = RunDiagnostics()
 
         self.data = ProfessionalDataManager(self.config, self.diagnostics)
@@ -150,7 +155,6 @@ class ProfessionalPortfolioEngine:
                     self.bl_weights = bl_w
 
         if self.bl_posterior_returns is not None and self.cov is not None:
-            # pragmatic placeholder: posterior covariance structure can be reused from diagnostics if needed later
             self.bl_posterior_cov = self.cov.copy()
 
         self.pca_results = self.analytics.pca_factor_analysis(
@@ -185,3 +189,31 @@ class ProfessionalPortfolioEngine:
             if strategy_obj.method == "tracking_error_optimal":
                 return strategy_name
         return self.best_strategy_name()
+
+    def filter_stress_dataframe(self, stress_df: pd.DataFrame) -> pd.DataFrame:
+        if stress_df is None or stress_df.empty:
+            return pd.DataFrame()
+
+        out = stress_df.copy()
+
+        selected_family = self.scenario_controls.get("selected_family", "All")
+        min_severity = float(self.scenario_controls.get("minimum_severity_threshold", 0.0))
+        quick_view = self.scenario_controls.get("quick_view", "All")
+
+        quick_view_map = {
+            "Crisis Only": "Crisis",
+            "Inflation Only": "Inflation",
+            "Banking Stress Only": "Banking_Stress",
+            "Sharp Rally Only": "Sharp_Rally",
+            "Sharp Selloff Only": "Sharp_Selloff",
+        }
+
+        if quick_view in quick_view_map:
+            out = out[out["family"] == quick_view_map[quick_view]]
+
+        if selected_family != "All":
+            out = out[out["family"] == selected_family]
+
+        out = out[out["severity_score"] >= min_severity]
+
+        return out.reset_index(drop=True)
