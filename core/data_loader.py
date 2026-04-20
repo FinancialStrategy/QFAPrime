@@ -1,251 +1,247 @@
-from __future__ import annotations
-
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+import random
+from typing import Iterable, List, Tuple, Dict, Optional
 
-import numpy as np
 import pandas as pd
+import streamlit as st
 import yfinance as yf
 
-from core.config import ProfessionalConfig, RunDiagnostics
-from core.universes import flatten_universe_dict, get_universe_definition
 
+def _normalize_close_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize yfinance output to a clean close-price DataFrame.
+    Works for both single-ticker and multi-ticker downloads.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-@dataclass
-class DataLoadResult:
-    asset_prices: pd.DataFrame
-    asset_returns: pd.DataFrame
-    benchmark_prices: pd.Series
-    benchmark_returns: pd.Series
-    asset_metadata: pd.DataFrame
-
-
-class ProfessionalDataManager:
-    def __init__(
-        self,
-        config: ProfessionalConfig,
-        diagnostics: Optional[RunDiagnostics] = None,
-    ):
-        self.config = config
-        self.diagnostics = diagnostics or RunDiagnostics()
-
-        self.asset_prices: pd.DataFrame = pd.DataFrame()
-        self.asset_returns: pd.DataFrame = pd.DataFrame()
-        self.benchmark_prices: pd.Series = pd.Series(dtype=float)
-        self.benchmark_returns: pd.Series = pd.Series(dtype=float)
-        self.asset_metadata: pd.DataFrame = pd.DataFrame()
-
-    def _build_metadata(self) -> pd.DataFrame:
-        universe = get_universe_definition(self.config.selected_universe)
-        flat = flatten_universe_dict(universe)
-
-        rows: List[Dict] = list(flat.values())
-        df = pd.DataFrame(rows)
-
-        if df.empty:
-            self.diagnostics.add_warning("Universe metadata is empty. Falling back to default symbols.")
-            df = pd.DataFrame({
-                "ticker": self.config.default_symbols,
-                "name": self.config.default_symbols,
-                "bucket": ["Fallback"] * len(self.config.default_symbols),
-                "asset_class": ["Equities"] * len(self.config.default_symbols),
-                "region_type": ["Unknown"] * len(self.config.default_symbols),
-                "category": ["Fallback"] * len(self.config.default_symbols),
-            })
-
-        return df.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
-
-    def _download_single_ticker(self, ticker: str, max_retries: int = 3) -> pd.Series:
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                data = yf.download(
-                    tickers=ticker,
-                    start=self.config.default_start_date,
-                    auto_adjust=True,
-                    progress=False,
-                    threads=False,
-                )
-
-                if data is None or data.empty:
-                    last_error = f"No data returned for {ticker}"
-                    time.sleep(1.0 + attempt)
-                    continue
-
-                if "Close" in data.columns:
-                    s = data["Close"].copy()
-                else:
-                    s = data.iloc[:, 0].copy()
-
-                s = pd.to_numeric(s, errors="coerce").dropna()
-                s.name = ticker
-
-                if s.empty:
-                    last_error = f"Empty close series for {ticker}"
-                    time.sleep(1.0 + attempt)
-                    continue
-
-                return s
-
-            except Exception as exc:
-                last_error = str(exc)
-                time.sleep(1.5 + attempt)
-
-        self.diagnostics.add_warning(f"Ticker download failed for {ticker}: {last_error}")
-        return pd.Series(dtype=float, name=ticker)
-
-    def _download_prices(self, tickers: List[str]) -> pd.DataFrame:
-        if not tickers:
-            return pd.DataFrame()
-
-        series_list: List[pd.Series] = []
-
-        for ticker in tickers:
-            s = self._download_single_ticker(ticker)
-            if not s.empty:
-                series_list.append(s)
-
-        if not series_list:
-            return pd.DataFrame()
-
-        df = pd.concat(series_list, axis=1)
-        return df
-
-    def _clean_prices(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
-            return df
-
-        out = df.copy()
-        out = out.loc[:, ~out.columns.duplicated()]
-        out = out.sort_index()
-        out = out.replace([np.inf, -np.inf], np.nan)
-        out = out.ffill(limit=5)
-        out = out.dropna(axis=0, how="all")
-
-        min_obs = max(30, int(self.config.min_observations))
-        valid_cols = [c for c in out.columns if out[c].dropna().shape[0] >= min_obs]
-
-        if not valid_cols:
-            return pd.DataFrame(index=out.index)
-
-        return out[valid_cols]
-
-    def _compute_returns(self, prices: pd.DataFrame) -> pd.DataFrame:
-        if prices.empty:
-            return pd.DataFrame()
-
-        if self.config.use_log_returns:
-            ret = np.log(prices / prices.shift(1))
+    # MultiIndex columns case
+    if isinstance(df.columns, pd.MultiIndex):
+        level0 = [str(c[0]).lower() for c in df.columns]
+        if "adj close" in level0:
+            out = df.xs("Adj Close", axis=1, level=0, drop_level=True).copy()
+        elif "close" in level0:
+            out = df.xs("Close", axis=1, level=0, drop_level=True).copy()
         else:
-            ret = prices.pct_change(fill_method=None)
+            return pd.DataFrame()
+    else:
+        # Single ticker case
+        cols_lower = {str(c).lower(): c for c in df.columns}
+        if "adj close" in cols_lower:
+            out = df[[cols_lower["adj close"]]].copy()
+        elif "close" in cols_lower:
+            out = df[[cols_lower["close"]]].copy()
+        else:
+            return pd.DataFrame()
 
-        ret = ret.replace([np.inf, -np.inf], np.nan)
-        ret = ret.dropna(how="all")
-        return ret
+    if isinstance(out, pd.Series):
+        out = out.to_frame()
 
-    def _get_benchmark_candidates(self) -> List[str]:
-        candidates = [self.config.benchmark_symbol]
+    out = out.sort_index()
+    out = out[~out.index.duplicated(keep="last")]
+    return out
 
-        fallback_map = {
-            "^GSPC": ["SPY", "VTI", "QQQ"],
-            "SPY": ["^GSPC", "VTI", "QQQ"],
-            "QQQ": ["^NDX", "SPY", "VTI"],
-            "GLD": ["GC=F", "IAU"],
-        }
 
-        for item in fallback_map.get(self.config.benchmark_symbol, []):
-            if item not in candidates:
-                candidates.append(item)
+def _chunk_list(items: List[str], chunk_size: int) -> List[List[str]]:
+    return [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
 
-        return candidates
 
-    def _download_benchmark(self) -> pd.Series:
-        for candidate in self._get_benchmark_candidates():
-            s = self._download_single_ticker(candidate)
-            if not s.empty:
-                if candidate != self.config.benchmark_symbol:
-                    self.diagnostics.add_warning(
-                        f"Primary benchmark {self.config.benchmark_symbol} failed. Using fallback benchmark {candidate}."
-                    )
-                self.config.benchmark_symbol = candidate
-                return s
-
-        return pd.Series(dtype=float, name=self.config.benchmark_symbol)
-
-    def load(self) -> DataLoadResult:
-        metadata = self._build_metadata()
-        tickers = metadata["ticker"].astype(str).tolist()
-
-        prices = self._download_prices(tickers)
-        prices = self._clean_prices(prices)
-
-        if prices.empty:
-            raise ValueError("No asset price data downloaded.")
-
-        benchmark_prices = self._download_benchmark()
-        if benchmark_prices.empty:
-            raise ValueError(f"Benchmark download failed for {self.config.benchmark_symbol} and fallback candidates.")
-
-        common_index = prices.index.intersection(benchmark_prices.index)
-        prices = prices.loc[common_index].copy()
-        benchmark_prices = benchmark_prices.loc[common_index].copy()
-
-        prices = self._clean_prices(prices)
-        benchmark_prices = pd.to_numeric(benchmark_prices, errors="coerce").dropna()
-
-        common_index = prices.index.intersection(benchmark_prices.index)
-        prices = prices.loc[common_index].copy()
-        benchmark_prices = benchmark_prices.loc[common_index].copy()
-
-        asset_returns = self._compute_returns(prices)
-        benchmark_returns_df = self._compute_returns(
-            benchmark_prices.to_frame(name=self.config.benchmark_symbol)
-        )
-
-        if benchmark_returns_df.empty:
-            raise ValueError("Benchmark returns are empty after cleaning/alignment.")
-
-        benchmark_returns = benchmark_returns_df.iloc[:, 0]
-
-        common_idx = asset_returns.index.intersection(benchmark_returns.index)
-        asset_returns = asset_returns.loc[common_idx].copy()
-        benchmark_returns = benchmark_returns.loc[common_idx].copy()
-
-        asset_returns = asset_returns.dropna(axis=1, how="all")
-        asset_returns = asset_returns.dropna(axis=0, how="all")
-
-        valid_cols = asset_returns.columns.tolist()
-        prices = prices[valid_cols].copy()
-        metadata = metadata[metadata["ticker"].isin(valid_cols)].reset_index(drop=True)
-
-        if len(valid_cols) < 2:
-            raise ValueError("Not enough assets available after download/cleaning. At least 2 assets are required.")
-
-        if asset_returns.empty:
-            raise ValueError("Asset returns are empty after cleaning/alignment.")
-
-        self.asset_prices = prices
-        self.asset_returns = asset_returns
-        self.benchmark_prices = benchmark_prices
-        self.benchmark_returns = benchmark_returns
-        self.asset_metadata = metadata
-
-        dropped = sorted(set(tickers) - set(valid_cols))
-        if dropped:
-            self.diagnostics.add_warning(
-                f"Dropped tickers after cleaning/download: {', '.join(dropped)}"
+def _single_ticker_download(
+    ticker: str,
+    start: str,
+    end: str,
+    auto_adjust: bool = False,
+    timeout: int = 30,
+    max_retries: int = 3,
+    pause_seconds: float = 2.0,
+) -> pd.DataFrame:
+    """
+    Download one ticker with retry/backoff.
+    Returns a single-column DataFrame named by ticker.
+    """
+    for attempt in range(max_retries):
+        try:
+            raw = yf.download(
+                ticker,
+                start=start,
+                end=end,
+                progress=False,
+                auto_adjust=auto_adjust,
+                threads=False,
+                timeout=timeout,
             )
 
-        self.diagnostics.add_info("num_assets", len(valid_cols))
-        self.diagnostics.add_info("num_observations", len(asset_returns))
-        self.diagnostics.add_info("benchmark_symbol", self.config.benchmark_symbol)
+            px = _normalize_close_frame(raw)
+            if not px.empty:
+                if px.shape[1] == 1:
+                    px.columns = [ticker]
+                return px
 
-        return DataLoadResult(
-            asset_prices=self.asset_prices,
-            asset_returns=self.asset_returns,
-            benchmark_prices=self.benchmark_prices,
-            benchmark_returns=self.benchmark_returns,
-            asset_metadata=self.asset_metadata,
+        except Exception as e:
+            print(f"[single_ticker_download] {ticker} attempt={attempt+1} error={e}")
+
+        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.25, 0.9)
+        time.sleep(sleep_time)
+
+    return pd.DataFrame()
+
+
+def _batch_download(
+    tickers: List[str],
+    start: str,
+    end: str,
+    auto_adjust: bool = False,
+    timeout: int = 30,
+    max_retries: int = 2,
+    pause_seconds: float = 2.0,
+) -> pd.DataFrame:
+    """
+    Download a batch of tickers with retry/backoff.
+    Returns a multi-column close-price DataFrame.
+    """
+    joined = " ".join(tickers)
+
+    for attempt in range(max_retries):
+        try:
+            raw = yf.download(
+                joined,
+                start=start,
+                end=end,
+                progress=False,
+                auto_adjust=auto_adjust,
+                threads=False,   # VERY IMPORTANT for Render/Yahoo throttling
+                group_by="column",
+                timeout=timeout,
+            )
+
+            px = _normalize_close_frame(raw)
+            if not px.empty:
+                # Ensure expected columns exist as much as possible
+                existing = [c for c in tickers if c in px.columns]
+                if existing:
+                    return px[existing].copy()
+                return px
+
+        except Exception as e:
+            print(f"[batch_download] tickers={tickers} attempt={attempt+1} error={e}")
+
+        sleep_time = pause_seconds * (attempt + 1) + random.uniform(0.25, 0.9)
+        time.sleep(sleep_time)
+
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_price_data(
+    tickers: List[str],
+    start: str,
+    end: str,
+    auto_adjust: bool = False,
+    batch_size: int = 4,
+    min_non_na_ratio: float = 0.70,
+) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
+    """
+    Robust Yahoo Finance loader for Streamlit/Render deployments.
+
+    Returns:
+        prices: cleaned close-price DataFrame
+        meta: {
+            "requested": [...],
+            "downloaded": [...],
+            "failed": [...]
+        }
+    """
+    tickers = [str(t).strip().upper() for t in tickers if str(t).strip()]
+    tickers = list(dict.fromkeys(tickers))  # de-duplicate while preserving order
+
+    if not tickers:
+        return pd.DataFrame(), {"requested": [], "downloaded": [], "failed": []}
+
+    all_frames = []
+    downloaded = set()
+
+    # Step 1: small batches to reduce throttling
+    for chunk in _chunk_list(tickers, batch_size):
+        df_chunk = _batch_download(
+            tickers=chunk,
+            start=start,
+            end=end,
+            auto_adjust=auto_adjust,
         )
+
+        if not df_chunk.empty:
+            available_cols = [c for c in chunk if c in df_chunk.columns]
+            if available_cols:
+                all_frames.append(df_chunk[available_cols].copy())
+                downloaded.update(available_cols)
+
+        # polite pause between batches
+        time.sleep(random.uniform(1.0, 2.0))
+
+    # Step 2: fallback one-by-one for missed tickers
+    missing = [t for t in tickers if t not in downloaded]
+    for ticker in missing:
+        df_one = _single_ticker_download(
+            ticker=ticker,
+            start=start,
+            end=end,
+            auto_adjust=auto_adjust,
+        )
+        if not df_one.empty:
+            all_frames.append(df_one)
+            downloaded.add(ticker)
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    if not all_frames:
+        return pd.DataFrame(), {
+            "requested": tickers,
+            "downloaded": [],
+            "failed": tickers,
+        }
+
+    prices = pd.concat(all_frames, axis=1)
+
+    # Remove duplicate columns if any
+    prices = prices.loc[:, ~prices.columns.duplicated(keep="last")]
+
+    # Reorder columns according to request
+    final_cols = [t for t in tickers if t in prices.columns]
+    prices = prices[final_cols].copy()
+
+    # Basic cleaning
+    prices = prices.sort_index()
+    prices = prices[~prices.index.duplicated(keep="last")]
+
+    # Keep only columns with enough observations
+    valid_cols = []
+    for col in prices.columns:
+        ratio = prices[col].notna().mean()
+        if ratio >= min_non_na_ratio:
+            valid_cols.append(col)
+
+    prices = prices[valid_cols].copy()
+
+    # Limited forward fill for small gaps
+    prices = prices.ffill(limit=3)
+
+    # Drop rows that are completely NaN
+    prices = prices.dropna(how="all")
+
+    # Final failed list
+    downloaded_final = list(prices.columns)
+    failed = [t for t in tickers if t not in downloaded_final]
+
+    meta = {
+        "requested": tickers,
+        "downloaded": downloaded_final,
+        "failed": failed,
+    }
+    return prices, meta
+
+
+def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
+    if prices is None or prices.empty:
+        return pd.DataFrame()
+    returns = prices.pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna(how="all")
+    return returns
