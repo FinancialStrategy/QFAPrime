@@ -24,7 +24,7 @@ st.set_page_config(
 
 
 # =========================================================
-# STYLING (BAŞLIK ÇERÇEVEDEN ÇOK UZAK)
+# STYLING (ÜST ÇİZGİ BELİRGİN)
 # =========================================================
 CUSTOM_CSS = """
 <style>
@@ -55,14 +55,15 @@ CUSTOM_CSS = """
         margin: 0 0 0.75rem 0;
     }
 
-    /* KART – ÜST PADDING ÇOK BÜYÜK (BAŞLIK ÇERÇEVEDEN UZAK) */
+    /* KART – ÜST ÇİZGİ BELİRGİN */
     .hero-shell {
         width: 100%;
         background: #ffffff;
-        border: 2px solid #cbd5e1;
+        border: 2px solid #cbd5e1;        /* Tüm kenarlar belirgin */
+        border-top: 3px solid #e74c3c;     /* Üst çizgi kırmızı (isteğe bağlı) */
         border-radius: 16px;
         padding: 80px 24px 40px 24px;
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        box-shadow: 0 -2px 0 #cbd5e1, 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
     }
 
@@ -140,7 +141,6 @@ CUSTOM_CSS = """
         font-size: 0.72rem;
     }
 
-    /* MOBİL UYUM */
     @media (max-width: 1100px) {
         .block-container {
             padding-left: 1.2rem !important;
@@ -165,7 +165,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
 # =========================================================
-# HELPERS
+# HELPERS (Aynen devam)
 # =========================================================
 def fmt_pct(x: Optional[float]) -> str:
     if x is None or pd.isna(x):
@@ -379,7 +379,7 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
 
 
 # =========================================================
-# SIDEBAR
+# SIDEBAR (Aynen devam)
 # =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
@@ -629,7 +629,7 @@ tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.t
 
 
 # =========================================================
-# OVERVIEW
+# OVERVIEW (Aynen devam)
 # =========================================================
 with tab_overview:
     st.markdown('<div class="section-label">Executive Summary</div>', unsafe_allow_html=True)
