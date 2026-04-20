@@ -1,3 +1,7 @@
+import os
+
+port = int(os.environ.get("PORT", 10000))
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional
