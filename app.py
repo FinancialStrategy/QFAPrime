@@ -70,10 +70,10 @@ CUSTOM_CSS = """
     .hero-shell::before {
         content: "";
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 4px;
+        top: 1;
+        left: 1;
+        right: 1;
+        height:6px;
         background: #2E86AB;   /* İstediğiniz renk */
         border-radius: 16px 16px 0 0;
     }
