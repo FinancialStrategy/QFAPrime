@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+import pandas as pd
 
 
 INSTITUTIONAL_MULTI_ASSET_UNIVERSE: Dict[str, Dict[str, str]] = {
@@ -111,12 +113,10 @@ def _infer_asset_class(bucket_name: str, display_name: str, ticker: str) -> str:
         return "Sectors"
     if bucket in {"north_america", "europe", "asia_pacific", "emerging_markets"}:
         return "Equity Indices"
-
     if ticker.endswith("-USD"):
         return "Crypto"
     if ticker.endswith("=X"):
         return "FX"
-
     return "Other"
 
 
@@ -133,6 +133,10 @@ def _infer_region(bucket_name: str) -> str:
         "Emerging_Markets": "Emerging Markets",
     }
     return mapping.get(bucket_name, "Unknown")
+
+
+def get_available_universes() -> List[str]:
+    return list(UNIVERSE_REGISTRY.keys())
 
 
 def get_universe_definition(selected_universe: str) -> Dict[str, Dict[str, str]]:
@@ -163,3 +167,27 @@ def flatten_universe_dict(universe_definition: Dict[str, Dict[str, str]]) -> Dic
             }
 
     return flat
+
+
+def get_universe_metadata(selected_universe: str) -> pd.DataFrame:
+    universe_definition = get_universe_definition(selected_universe)
+    flat = flatten_universe_dict(universe_definition)
+
+    if not flat:
+        return pd.DataFrame(
+            columns=["ticker", "name", "bucket", "asset_class", "region_type", "category"]
+        )
+
+    return pd.DataFrame(list(flat.values())).sort_values(
+        ["bucket", "name"],
+        ascending=[True, True],
+    ).reset_index(drop=True)
+
+
+def get_available_regions(selected_universe: str) -> List[str]:
+    meta = get_universe_metadata(selected_universe)
+    if meta.empty or "region_type" not in meta.columns:
+        return ["All"]
+
+    regions = sorted([r for r in meta["region_type"].dropna().astype(str).unique().tolist() if r])
+    return ["All"] + regions
