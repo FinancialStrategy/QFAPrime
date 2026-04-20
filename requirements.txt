@@ -1,0 +1,11 @@
+streamlit
+numpy
+pandas
+scipy
+plotly
+yfinance
+PyPortfolioOpt
+statsmodels
+cvxpy
+ecos
+osqp
