@@ -100,6 +100,133 @@ class StreamlitChartBuilder:
         )
         return fig
 
+    def relative_drawdown_chart(
+        self,
+        relative_drawdown_df: pd.DataFrame,
+        strategy_name: str,
+    ) -> go.Figure:
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=relative_drawdown_df.index,
+            y=relative_drawdown_df["portfolio_drawdown"],
+            mode="lines",
+            name=f"{strategy_name} Drawdown",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        fig.add_trace(go.Scatter(
+            x=relative_drawdown_df.index,
+            y=relative_drawdown_df["benchmark_drawdown"],
+            mode="lines",
+            name=f"Benchmark ({self.config.benchmark}) Drawdown",
+            line=dict(color="#8c99a5", width=1.6, dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=relative_drawdown_df.index,
+            y=relative_drawdown_df["relative_drawdown"],
+            mode="lines",
+            name="Relative Drawdown",
+            line=dict(color="#596d5f", width=1.8, dash="dot"),
+        ))
+
+        fig.update_layout(
+            title="Relative Drawdown vs Benchmark",
+            yaxis_tickformat=".0%",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
+    def rolling_sharpe_chart(
+        self,
+        rolling_sharpe_63: pd.Series,
+        rolling_sharpe_126: pd.Series | None = None,
+    ) -> go.Figure:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=rolling_sharpe_63.index,
+            y=rolling_sharpe_63.values,
+            mode="lines",
+            name="Rolling Sharpe 63D",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        if rolling_sharpe_126 is not None:
+            fig.add_trace(go.Scatter(
+                x=rolling_sharpe_126.index,
+                y=rolling_sharpe_126.values,
+                mode="lines",
+                name="Rolling Sharpe 126D",
+                line=dict(color="#8c99a5", width=1.8, dash="dash"),
+            ))
+
+        fig.add_hline(y=0, line_color="#b0b8bf", line_width=1)
+        fig.update_layout(
+            title="Rolling Sharpe Ratio",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
+    def rolling_beta_chart(
+        self,
+        rolling_beta_63: pd.Series,
+        rolling_beta_126: pd.Series | None = None,
+    ) -> go.Figure:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=rolling_beta_63.index,
+            y=rolling_beta_63.values,
+            mode="lines",
+            name="Rolling Beta 63D",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        if rolling_beta_126 is not None:
+            fig.add_trace(go.Scatter(
+                x=rolling_beta_126.index,
+                y=rolling_beta_126.values,
+                mode="lines",
+                name="Rolling Beta 126D",
+                line=dict(color="#8c99a5", width=1.8, dash="dash"),
+            ))
+
+        fig.add_hline(y=1, line_color="#b0b8bf", line_width=1, line_dash="dot")
+        fig.update_layout(
+            title="Rolling Beta vs Benchmark",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
+    def rolling_information_ratio_chart(
+        self,
+        rolling_ir_63: pd.Series,
+        rolling_ir_126: pd.Series | None = None,
+    ) -> go.Figure:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=rolling_ir_63.index,
+            y=rolling_ir_63.values,
+            mode="lines",
+            name="Rolling IR 63D",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        if rolling_ir_126 is not None:
+            fig.add_trace(go.Scatter(
+                x=rolling_ir_126.index,
+                y=rolling_ir_126.values,
+                mode="lines",
+                name="Rolling IR 126D",
+                line=dict(color="#8c99a5", width=1.8, dash="dash"),
+            ))
+
+        fig.add_hline(y=0, line_color="#b0b8bf", line_width=1)
+        fig.update_layout(
+            title="Rolling Information Ratio",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
     def performance_dashboard(self, metrics_df: pd.DataFrame) -> go.Figure:
         fig = make_subplots(
             rows=2,
@@ -300,6 +427,53 @@ class StreamlitChartBuilder:
         )
         return fig
 
+    def tracking_error_band_chart(
+        self,
+        rolling_te_63: pd.Series,
+        te_target: float,
+        tolerance: float = 0.01,
+    ) -> go.Figure:
+        upper = te_target + tolerance
+        lower = max(te_target - tolerance, 0.0)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=rolling_te_63.index,
+            y=rolling_te_63.values,
+            mode="lines",
+            name="63D Rolling TE",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        fig.add_trace(go.Scatter(
+            x=rolling_te_63.index,
+            y=[te_target] * len(rolling_te_63),
+            mode="lines",
+            name="TE Target",
+            line=dict(color="#596d5f", width=1.8, dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=rolling_te_63.index,
+            y=[upper] * len(rolling_te_63),
+            mode="lines",
+            name="Upper Band",
+            line=dict(color="#8c99a5", width=1.3, dash="dot"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=rolling_te_63.index,
+            y=[lower] * len(rolling_te_63),
+            mode="lines",
+            name="Lower Band",
+            line=dict(color="#8c99a5", width=1.3, dash="dot"),
+        ))
+
+        fig.update_layout(
+            title="Tracking Error Bands (Target ± Range)",
+            yaxis_tickformat=".0%",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
     def benchmark_vs_tracking_error_curve(
         self,
         portfolio_returns: pd.Series,
@@ -354,6 +528,32 @@ class StreamlitChartBuilder:
         )
         fig.update_yaxes(title_text="Cumulative Return", tickformat=".0%", secondary_y=False)
         fig.update_yaxes(title_text="63D Rolling TE", tickformat=".0%", secondary_y=True)
+        return fig
+
+    def active_risk_contribution_region_chart(
+        self,
+        region_df: pd.DataFrame,
+    ) -> go.Figure:
+        if region_df is None or region_df.empty:
+            fig = go.Figure()
+            fig.add_annotation(text="No active risk contribution data available.", x=0.5, y=0.5, showarrow=False)
+            fig.update_layout(title="Active Risk Contribution by Region", **self._base_layout())
+            return fig
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=region_df["region_type"],
+            y=region_df["pct_active_risk_contribution"],
+            text=[f"{v:.2%}" if pd.notna(v) else "N/A" for v in region_df["pct_active_risk_contribution"]],
+            textposition="auto",
+            marker_color="#5e7286",
+            name="Pct Active Risk Contribution",
+        ))
+        fig.update_layout(
+            title="Active Risk Contribution by Region",
+            yaxis_tickformat=".0%",
+            **self._base_layout()
+        )
         return fig
 
     def stress_test_chart(self, stress_df: pd.DataFrame) -> go.Figure:
