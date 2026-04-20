@@ -106,7 +106,6 @@ class StreamlitChartBuilder:
         strategy_name: str,
     ) -> go.Figure:
         fig = go.Figure()
-
         fig.add_trace(go.Scatter(
             x=relative_drawdown_df.index,
             y=relative_drawdown_df["portfolio_drawdown"],
@@ -350,6 +349,89 @@ class StreamlitChartBuilder:
         )
         fig.update_xaxes(tickformat=".0%")
         fig.update_yaxes(tickformat=".0%")
+        return fig
+
+    def posterior_frontier_chart(
+        self,
+        prior_returns: pd.Series,
+        posterior_returns: pd.Series,
+        posterior_cov: pd.DataFrame,
+        bl_weights: Dict[str, float],
+    ) -> go.Figure:
+        assets = list(posterior_returns.index)
+        rng = np.random.default_rng(123)
+
+        vols = []
+        rets = []
+        for _ in range(800):
+            w = rng.random(len(assets))
+            w /= w.sum()
+            vols.append(float(np.sqrt(w @ posterior_cov.values @ w)))
+            rets.append(float(np.dot(w, posterior_returns.values)))
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=vols,
+            y=rets,
+            mode="markers",
+            name="Posterior Feasible Portfolios",
+            opacity=0.25,
+            marker=dict(color="#9aa5af", size=5)
+        ))
+
+        w_bl = pd.Series(bl_weights).reindex(assets).fillna(0.0).values
+        v_bl = float(np.sqrt(w_bl @ posterior_cov.values @ w_bl))
+        r_bl = float(np.dot(w_bl, posterior_returns.values))
+        fig.add_trace(go.Scatter(
+            x=[v_bl],
+            y=[r_bl],
+            mode="markers+text",
+            text=["BL Posterior Optimum"],
+            textposition="top center",
+            name="BL Posterior Optimum",
+            marker=dict(size=11, color="#4d6175")
+        ))
+
+        fig.update_layout(
+            title="Black-Litterman Posterior Frontier",
+            xaxis_title="Volatility",
+            yaxis_title="Expected Return",
+            **self._base_layout()
+        )
+        fig.update_xaxes(tickformat=".0%")
+        fig.update_yaxes(tickformat=".0%")
+        return fig
+
+    def prior_vs_posterior_return_chart(
+        self,
+        prior_returns: pd.Series,
+        posterior_returns: pd.Series,
+    ) -> go.Figure:
+        df = pd.DataFrame({
+            "prior": prior_returns,
+            "posterior": posterior_returns,
+        }).dropna().sort_values("posterior", ascending=False)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df.index,
+            y=df["prior"],
+            name="Prior",
+            marker_color="#9aa5af"
+        ))
+        fig.add_trace(go.Bar(
+            x=df.index,
+            y=df["posterior"],
+            name="Posterior",
+            marker_color="#4d6175"
+        ))
+
+        fig.update_layout(
+            title="Prior vs Posterior Expected Returns",
+            barmode="group",
+            yaxis_tickformat=".0%",
+            **self._base_layout()
+        )
         return fig
 
     def relative_frontier_chart(
@@ -597,6 +679,41 @@ class StreamlitChartBuilder:
         )
         return fig
 
+    def stress_detail_chart(
+        self,
+        scenario_path_df: pd.DataFrame,
+        scenario_name: str,
+    ) -> go.Figure:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=scenario_path_df.index,
+            y=scenario_path_df["portfolio_cum"],
+            mode="lines",
+            name="Portfolio",
+            line=dict(color="#425b76", width=2.0),
+        ))
+        fig.add_trace(go.Scatter(
+            x=scenario_path_df.index,
+            y=scenario_path_df["benchmark_cum"],
+            mode="lines",
+            name="Benchmark",
+            line=dict(color="#8c99a5", width=1.8, dash="dash"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=scenario_path_df.index,
+            y=scenario_path_df["relative_cum"],
+            mode="lines",
+            name="Relative",
+            line=dict(color="#596d5f", width=1.8, dash="dot"),
+        ))
+        fig.update_layout(
+            title=f"Stress Path Detail: {scenario_name}",
+            yaxis_tickformat=".0%",
+            hovermode="x unified",
+            **self._base_layout()
+        )
+        return fig
+
     def var_family_chart(self, metrics_df: pd.DataFrame, kind: str = "absolute") -> go.Figure:
         cols = ["var_95", "cvar_95"] if kind == "absolute" else ["relative_var_95", "relative_cvar_95"]
         title = "VaR / CVaR Figures" if kind == "absolute" else "Relative VaR Figures"
@@ -686,4 +803,34 @@ class StreamlitChartBuilder:
             **self._base_layout()
         )
         fig.update_yaxes(tickprefix="$", tickformat=",.0f")
+        return fig
+
+    def pca_explained_variance_chart(self, explained_variance_ratio: pd.Series) -> go.Figure:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=explained_variance_ratio.index,
+            y=explained_variance_ratio.values,
+            text=[f"{v:.2%}" for v in explained_variance_ratio.values],
+            textposition="auto",
+            marker_color="#5e7286"
+        ))
+        fig.update_layout(
+            title="PCA Explained Variance Ratio",
+            yaxis_tickformat=".0%",
+            **self._base_layout()
+        )
+        return fig
+
+    def pca_loadings_heatmap(self, loadings: pd.DataFrame) -> go.Figure:
+        fig = go.Figure(data=go.Heatmap(
+            z=loadings.values,
+            x=loadings.columns,
+            y=loadings.index,
+            colorscale="RdBu",
+            zmid=0
+        ))
+        fig.update_layout(
+            title="PCA Loadings Heatmap",
+            **self._base_layout()
+        )
         return fig
