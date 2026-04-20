@@ -61,7 +61,7 @@ CUSTOM_CSS = """
         background: #ffffff;
         border: 1px solid #dbe3ec;
         border-radius: 16px;
-        padding: 32px 24px 24px 24px;
+        padding: 20px 24px 20px 24px; /* Üst padding 20px yapıldı */
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         overflow: visible;
     }
@@ -74,7 +74,7 @@ CUSTOM_CSS = """
         line-height: 1.3;
         color: #0f172a;
         text-align: left;
-        margin: 0 0 10px 0;
+        margin: 0 0 8px 0;
         padding: 0;
         letter-spacing: -0.01em;
         word-break: break-word;
@@ -90,7 +90,7 @@ CUSTOM_CSS = """
         line-height: 1.4;
         color: #475569;
         text-align: left;
-        margin-top: 0.5rem;
+        margin-top: 0.25rem;
         padding: 0;
         word-break: break-word;
         overflow-wrap: break-word;
