@@ -45,6 +45,185 @@ class AnalyticsEngine:
 
         return out
 
+    def rolling_sharpe(
+        self,
+        portfolio_returns: pd.Series,
+        window: int = 63,
+        min_periods: int = 30,
+    ) -> pd.Series:
+        rf_daily = self.config.risk_free_rate / self.config.annual_trading_days
+        excess = portfolio_returns - rf_daily
+
+        rolling_mean = excess.rolling(window, min_periods=min_periods).mean()
+        rolling_std = portfolio_returns.rolling(window, min_periods=min_periods).std()
+
+        sharpe = (rolling_mean / rolling_std) * np.sqrt(self.config.annual_trading_days)
+        return sharpe.replace([np.inf, -np.inf], np.nan)
+
+    def rolling_beta(
+        self,
+        portfolio_returns: pd.Series,
+        benchmark_returns: pd.Series,
+        window: int = 63,
+        min_periods: int = 30,
+    ) -> pd.Series:
+        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        aligned.columns = ["portfolio", "benchmark"]
+
+        cov = aligned["portfolio"].rolling(window, min_periods=min_periods).cov(aligned["benchmark"])
+        var_b = aligned["benchmark"].rolling(window, min_periods=min_periods).var()
+        beta = cov / var_b.replace(0, np.nan)
+        return beta.replace([np.inf, -np.inf], np.nan)
+
+    def rolling_information_ratio(
+        self,
+        portfolio_returns: pd.Series,
+        benchmark_returns: pd.Series,
+        window: int = 63,
+        min_periods: int = 30,
+    ) -> pd.Series:
+        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        aligned.columns = ["portfolio", "benchmark"]
+
+        active = aligned["portfolio"] - aligned["benchmark"]
+        active_mean = active.rolling(window, min_periods=min_periods).mean()
+        active_std = active.rolling(window, min_periods=min_periods).std()
+
+        ir = (active_mean / active_std) * np.sqrt(self.config.annual_trading_days)
+        return ir.replace([np.inf, -np.inf], np.nan)
+
+    def rolling_tracking_error(
+        self,
+        portfolio_returns: pd.Series,
+        benchmark_returns: pd.Series,
+        window: int = 63,
+        min_periods: int = 30,
+    ) -> pd.Series:
+        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        aligned.columns = ["portfolio", "benchmark"]
+
+        te = (
+            (aligned["portfolio"] - aligned["benchmark"])
+            .rolling(window, min_periods=min_periods)
+            .std()
+            * np.sqrt(self.config.annual_trading_days)
+        )
+        return te.replace([np.inf, -np.inf], np.nan)
+
+    def drawdown_series(self, returns: pd.Series) -> pd.Series:
+        cumulative = (1 + returns).cumprod()
+        rolling_max = cumulative.cummax()
+        return cumulative / rolling_max - 1
+
+    def relative_drawdown_series(
+        self,
+        portfolio_returns: pd.Series,
+        benchmark_returns: pd.Series,
+    ) -> pd.DataFrame:
+        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        aligned.columns = ["portfolio", "benchmark"]
+
+        p_dd = self.drawdown_series(aligned["portfolio"])
+        b_dd = self.drawdown_series(aligned["benchmark"])
+        rel_dd = p_dd - b_dd
+
+        return pd.DataFrame({
+            "portfolio_drawdown": p_dd,
+            "benchmark_drawdown": b_dd,
+            "relative_drawdown": rel_dd,
+        })
+
+    def active_return_series(
+        self,
+        portfolio_returns: pd.Series,
+        benchmark_returns: pd.Series,
+    ) -> pd.Series:
+        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        aligned.columns = ["portfolio", "benchmark"]
+        return aligned["portfolio"] - aligned["benchmark"]
+
+    def active_risk_contribution_by_region(
+        self,
+        asset_returns: pd.DataFrame,
+        weights: Dict[str, float],
+        benchmark_ticker: str,
+        asset_metadata: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Approximate active risk contribution by region using long-only portfolio weights
+        and benchmark proxy concentrated in benchmark_ticker when present.
+        """
+        if asset_returns.empty:
+            return pd.DataFrame()
+
+        assets = list(asset_returns.columns)
+        w = pd.Series(weights).reindex(assets).fillna(0.0)
+
+        b = pd.Series(0.0, index=assets)
+        if benchmark_ticker in b.index:
+            b[benchmark_ticker] = 1.0
+        elif "SPY" in b.index:
+            b["SPY"] = 1.0
+        else:
+            b[:] = 1 / len(b)
+
+        active_w = w - b
+        cov = asset_returns.cov() * self.config.annual_trading_days
+
+        port_var = float(active_w.values @ cov.values @ active_w.values)
+        if port_var <= 0:
+            return pd.DataFrame()
+
+        marginal = cov.values @ active_w.values
+        contrib = active_w.values * marginal / np.sqrt(port_var)
+
+        contrib_df = pd.DataFrame({
+            "ticker": assets,
+            "active_weight": active_w.values,
+            "active_risk_contribution": contrib,
+        })
+
+        meta = asset_metadata[["ticker", "region_type"]].drop_duplicates().copy()
+        merged = contrib_df.merge(meta, on="ticker", how="left")
+        merged["region_type"] = merged["region_type"].fillna("Unknown")
+
+        region_df = merged.groupby("region_type", as_index=False).agg(
+            active_weight=("active_weight", "sum"),
+            active_risk_contribution=("active_risk_contribution", "sum"),
+        )
+
+        total_arc = region_df["active_risk_contribution"].sum()
+        if total_arc != 0:
+            region_df["pct_active_risk_contribution"] = region_df["active_risk_contribution"] / total_arc
+        else:
+            region_df["pct_active_risk_contribution"] = np.nan
+
+        region_df = region_df.sort_values("pct_active_risk_contribution", ascending=False)
+        return region_df
+
+    def risk_contribution_table(
+        self,
+        weights: Dict[str, float],
+        cov: pd.DataFrame,
+    ) -> pd.DataFrame:
+        w = pd.Series(weights).reindex(cov.index).fillna(0.0)
+        sigma = cov.values
+        port_var = float(w.values @ sigma @ w.values)
+        if port_var <= 0:
+            return pd.DataFrame()
+
+        marginal = sigma @ w.values
+        total_contrib = w.values * marginal / np.sqrt(port_var)
+        pct_contrib = total_contrib / np.sum(total_contrib)
+
+        return pd.DataFrame({
+            "asset": cov.index,
+            "weight": w.values,
+            "marginal_risk": marginal,
+            "risk_contribution": total_contrib,
+            "pct_risk_contribution": pct_contrib,
+        }).sort_values("pct_risk_contribution", ascending=False)
+
     def calculate_all_metrics(
         self,
         portfolio_returns: pd.Series,
@@ -85,9 +264,9 @@ class AnalyticsEngine:
             else np.nan
         )
 
-        cumulative = (1 + aligned["portfolio"]).cumprod()
-        rolling_max = cumulative.cummax()
-        drawdown = cumulative / rolling_max - 1
+        drawdown = self.drawdown_series(aligned["portfolio"])
+        benchmark_drawdown = self.drawdown_series(aligned["benchmark"])
+        relative_drawdown = drawdown - benchmark_drawdown
         max_drawdown = float(drawdown.min())
 
         calmar = float(annual_return_portfolio / abs(max_drawdown)) if max_drawdown < 0 else np.nan
@@ -141,46 +320,10 @@ class AnalyticsEngine:
             "portfolio_values": portfolio_values,
             "benchmark_values": benchmark_values,
             "drawdown_series": drawdown,
+            "benchmark_drawdown_series": benchmark_drawdown,
+            "relative_drawdown_series": relative_drawdown,
             "portfolio_returns": aligned["portfolio"],
             "benchmark_returns": aligned["benchmark"],
+            "active_return_series": tracking_diff,
             **var_family,
         }
-
-    def rolling_tracking_error(
-        self,
-        portfolio_returns: pd.Series,
-        benchmark_returns: pd.Series,
-        window: int = 63,
-        min_periods: int = 30,
-    ) -> pd.Series:
-        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
-        aligned.columns = ["portfolio", "benchmark"]
-        return (
-            (aligned["portfolio"] - aligned["benchmark"])
-            .rolling(window, min_periods=min_periods)
-            .std()
-            * np.sqrt(self.config.annual_trading_days)
-        )
-
-    def risk_contribution_table(
-        self,
-        weights: Dict[str, float],
-        cov: pd.DataFrame,
-    ) -> pd.DataFrame:
-        w = pd.Series(weights).reindex(cov.index).fillna(0.0)
-        sigma = cov.values
-        port_var = float(w.values @ sigma @ w.values)
-        if port_var <= 0:
-            return pd.DataFrame()
-
-        marginal = sigma @ w.values
-        total_contrib = w.values * marginal / np.sqrt(port_var)
-        pct_contrib = total_contrib / np.sum(total_contrib)
-
-        return pd.DataFrame({
-            "asset": cov.index,
-            "weight": w.values,
-            "marginal_risk": marginal,
-            "risk_contribution": total_contrib,
-            "pct_risk_contribution": pct_contrib,
-        }).sort_values("pct_risk_contribution", ascending=False)
