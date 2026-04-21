@@ -1,248 +1,83 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
-import pandas as pd
+UNIVERSE_REGISTRY: Dict[str, List[str]] = {
+    "institutional_multi_asset": [
+        "SPY",
+        "QQQ",
+        "GLD",
+        "TLT",
+        "IEF",
+        "DBC",
+        "VNQ",
+    ],
+    "global_equities": [
+        "SPY",
+        "VEA",
+        "VWO",
+        "EWJ",
+        "EWU",
+    ],
+    "defensive_allocation": [
+        "TLT",
+        "IEF",
+        "GLD",
+        "TIP",
+        "VNQ",
+    ],
+    "inflation_hedge": [
+        "GLD",
+        "DBC",
+        "TIP",
+        "XLE",
+    ],
+    "growth_allocation": [
+        "QQQ",
+        "SPY",
+        "VUG",
+        "SOXX",
+    ],
+    "balanced_60_40_plus": [
+        "SPY",
+        "IEF",
+        "TLT",
+        "GLD",
+        "VNQ",
+    ],
+    "major_indices_proxy": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+    ],
+    "precious_metals": [
+        "GLD",
+        "SLV",
+        "PPLT",
+    ],
+    "real_assets": [
+        "GLD",
+        "DBC",
+        "VNQ",
+        "TIP",
+    ],
+    "risk_on_risk_off": [
+        "QQQ",
+        "SPY",
+        "TLT",
+        "GLD",
+        "DBC",
+    ],
+}
 
-from core.universes import UNIVERSE_REGISTRY, get_universe_tickers
+
+def list_universes() -> List[str]:
+    return list(UNIVERSE_REGISTRY.keys())
 
 
-@dataclass
-class ProfessionalConfig:
-    # =====================================================
-    # Core capital / market settings
-    # =====================================================
-    initial_capital: float = 100_000.0
-    annual_trading_days: int = 252
-
-    # App-side naming
-    benchmark_symbol: str = "^GSPC"
-    default_start_date: str = "2019-01-01"
-
-    # Legacy/original-engine naming
-    benchmark: str = "^GSPC"
-    as_of_date: str = field(
-        default_factory=lambda: (pd.Timestamp.today().normalize()).strftime("%Y-%m-%d")
-    )
-    lookback_years: int = 6
-
-    risk_free_rate: float = 0.03
-
-    # =====================================================
-    # Portfolio construction settings
-    # =====================================================
-    min_weight: float = 0.00
-    max_weight: float = 0.20
-    max_category_weight: float = 0.35
-    allow_short: bool = False
-
-    # =====================================================
-    # Model / estimation controls
-    # =====================================================
-    covariance_method: str = "ledoit_wolf"
-    expected_return_method: str = "historical_mean"
-    correlation_method: str = "pearson"
-    use_log_returns: bool = False
-
-    # =====================================================
-    # Risk / diagnostics controls
-    # =====================================================
-    min_observations: int = 60
-    rolling_window: int = 63
-    confidence_levels: Tuple[float, ...] = (0.90, 0.95, 0.99)
-
-    # =====================================================
-    # Optimization controls
-    # =====================================================
-    turnover_penalty: float = 0.005
-    transaction_cost_bps: float = 10.0
-    tracking_error_target: float = 0.06
-
-    # =====================================================
-    # Data / runtime controls
-    # =====================================================
-    data_timeout_seconds: int = 30
-    enable_caching: bool = True
-    cache_size: int = 128
-
-    # =====================================================
-    # Frontier / FinQuant controls
-    # =====================================================
-    n_efficient_frontier_points: int = 50
-    finquant_mc_trials: int = 8000
-
-    # =====================================================
-    # Universe selection
-    # =====================================================
-    selected_universe: str = "institutional_multi_asset"
-
-    # Optional explicit asset universe override
-    asset_universe: Dict[str, List[str]] = field(default_factory=dict)
-
-    # =====================================================
-    # Reporting
-    # =====================================================
-    report_file: str = field(
-        default_factory=lambda: f"qfa_quant_platform_{datetime.today().strftime('%Y%m%d_%H%M')}.html"
-    )
-
-    def __post_init__(self) -> None:
-        # ---------------------------------------------
-        # Benchmark alias reconciliation
-        # ---------------------------------------------
-        if self.benchmark_symbol and not self.benchmark:
-            self.benchmark = self.benchmark_symbol
-        elif self.benchmark and not self.benchmark_symbol:
-            self.benchmark_symbol = self.benchmark
-
-        # keep both aligned
-        self.benchmark = self.benchmark_symbol
-
-        # ---------------------------------------------
-        # Start-date / lookback reconciliation
-        # ---------------------------------------------
-        # If app explicitly provides default_start_date, use it.
-        # Otherwise infer from lookback_years and as_of_date.
-        if not self.default_start_date:
-            inferred_start = pd.Timestamp(self.as_of_date) - pd.DateOffset(years=self.lookback_years)
-            self.default_start_date = inferred_start.strftime("%Y-%m-%d")
-
-        # If a selected universe exists, populate asset_universe
-        # from central registry when not explicitly supplied.
-        if not self.asset_universe:
-            tickers = get_universe_tickers(self.selected_universe) if self.selected_universe in UNIVERSE_REGISTRY else []
-            if tickers:
-                self.asset_universe = {
-                    "SelectedUniverse": tickers
-                }
-
-        # Final fallback if still empty
-        if not self.asset_universe:
-            fallback = UNIVERSE_REGISTRY.get("institutional_multi_asset", [])
-            self.asset_universe = {
-                "SelectedUniverse": list(fallback)
-            }
-
-        # Basic numeric sanitation
-        self.initial_capital = float(self.initial_capital)
-        self.risk_free_rate = float(self.risk_free_rate)
-        self.min_weight = float(self.min_weight)
-        self.max_weight = float(self.max_weight)
-        self.max_category_weight = float(self.max_category_weight)
-        self.turnover_penalty = float(self.turnover_penalty)
-        self.transaction_cost_bps = float(self.transaction_cost_bps)
-        self.tracking_error_target = float(self.tracking_error_target)
-        self.min_observations = int(self.min_observations)
-        self.rolling_window = int(self.rolling_window)
-        self.data_timeout_seconds = int(self.data_timeout_seconds)
-        self.cache_size = int(self.cache_size)
-        self.n_efficient_frontier_points = int(self.n_efficient_frontier_points)
-        self.finquant_mc_trials = int(self.finquant_mc_trials)
-
-        # Sensible bounds
-        if self.max_weight < self.min_weight:
-            self.max_weight = self.min_weight
-
-        if self.max_category_weight < self.max_weight:
-            self.max_category_weight = max(self.max_category_weight, self.max_weight)
-
-        if self.min_observations < 20:
-            self.min_observations = 20
-
-        if self.rolling_window < 20:
-            self.rolling_window = 20
-
-        if not self.selected_universe:
-            self.selected_universe = "institutional_multi_asset"
-
-    # =====================================================
-    # Legacy / engine-compatible properties
-    # =====================================================
-    @property
-    def start_date(self) -> str:
-        """
-        Legacy compatibility for older engine/data manager code.
-        """
-        return self.default_start_date
-
-    @property
-    def end_date(self) -> str:
-        """
-        Legacy compatibility for original data manager code.
-        """
-        return self.as_of_date
-
-    @property
-    def assets(self) -> List[str]:
-        """
-        Flattened asset list across categories.
-        Used by older ProfessionalDataManager logic.
-        """
-        out: List[str] = []
-        for _, names in self.asset_universe.items():
-            out.extend(names)
-        out = [str(x).strip().upper() for x in out if str(x).strip()]
-        out = list(dict.fromkeys(out))
-        return out
-
-    @property
-    def asset_categories(self) -> Dict[str, str]:
-        """
-        Mapping ticker -> category.
-        Useful for category limits and reporting.
-        """
-        mapping: Dict[str, str] = {}
-        for category, names in self.asset_universe.items():
-            for ticker in names:
-                mapping[str(ticker).strip().upper()] = str(category)
-        return mapping
-
-    @property
-    def universe_tickers(self) -> List[str]:
-        """
-        App/engine helper for selected universe only.
-        """
-        return get_universe_tickers(self.selected_universe)
-
-    # =====================================================
-    # Utility
-    # =====================================================
-    def to_dict(self) -> Dict[str, object]:
-        return {
-            "initial_capital": self.initial_capital,
-            "annual_trading_days": self.annual_trading_days,
-            "benchmark_symbol": self.benchmark_symbol,
-            "benchmark": self.benchmark,
-            "default_start_date": self.default_start_date,
-            "as_of_date": self.as_of_date,
-            "lookback_years": self.lookback_years,
-            "risk_free_rate": self.risk_free_rate,
-            "min_weight": self.min_weight,
-            "max_weight": self.max_weight,
-            "max_category_weight": self.max_category_weight,
-            "allow_short": self.allow_short,
-            "covariance_method": self.covariance_method,
-            "expected_return_method": self.expected_return_method,
-            "correlation_method": self.correlation_method,
-            "use_log_returns": self.use_log_returns,
-            "min_observations": self.min_observations,
-            "rolling_window": self.rolling_window,
-            "confidence_levels": self.confidence_levels,
-            "turnover_penalty": self.turnover_penalty,
-            "transaction_cost_bps": self.transaction_cost_bps,
-            "tracking_error_target": self.tracking_error_target,
-            "data_timeout_seconds": self.data_timeout_seconds,
-            "enable_caching": self.enable_caching,
-            "cache_size": self.cache_size,
-            "n_efficient_frontier_points": self.n_efficient_frontier_points,
-            "finquant_mc_trials": self.finquant_mc_trials,
-            "selected_universe": self.selected_universe,
-            "asset_universe": self.asset_universe,
-            "report_file": self.report_file,
-            "start_date": self.start_date,
-            "end_date": self.end_date,
-            "assets": self.assets,
-            "asset_categories": self.asset_categories,
-        }
+def get_universe_tickers(universe_name: str) -> List[str]:
+    raw = UNIVERSE_REGISTRY.get(universe_name, [])
+    tickers = [str(x).strip().upper() for x in raw if str(x).strip()]
+    tickers = list(dict.fromkeys(tickers))
+    return tickers
