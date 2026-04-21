@@ -1,148 +1,248 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Tuple
 
+import pandas as pd
 
-@dataclass
-class RunDiagnostics:
-    warnings: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-    info: Dict[str, Any] = field(default_factory=dict)
-    strategy_diagnostics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-
-    def add_warning(self, message: str) -> None:
-        if message:
-            self.warnings.append(str(message))
-
-    def add_error(self, message: str) -> None:
-        if message:
-            self.errors.append(str(message))
-
-    def add_info(self, key: str, value: Any) -> None:
-        self.info[str(key)] = value
-
-    def add_strategy_info(self, strategy_name: str, key: str, value: Any) -> None:
-        strategy_name = str(strategy_name)
-        key = str(key)
-
-        if strategy_name not in self.strategy_diagnostics:
-            self.strategy_diagnostics[strategy_name] = {}
-
-        self.strategy_diagnostics[strategy_name][key] = value
-
-    def get_strategy_info(self, strategy_name: str) -> Dict[str, Any]:
-        return self.strategy_diagnostics.get(str(strategy_name), {})
-
-    def summary(self) -> Dict[str, Any]:
-        return {
-            "warnings": self.warnings,
-            "errors": self.errors,
-            "info": self.info,
-            "strategy_diagnostics": self.strategy_diagnostics,
-        }
+from core.universes import UNIVERSE_REGISTRY, get_universe_tickers
 
 
 @dataclass
 class ProfessionalConfig:
-    app_title: str = "Multi-Asset Portfolio Analytics"
-
-    risk_free_rate: float = 0.03
-    trading_days: int = 252
+    # =====================================================
+    # Core capital / market settings
+    # =====================================================
+    initial_capital: float = 100_000.0
     annual_trading_days: int = 252
 
-    confidence_level: float = 0.95
-    confidence_levels: List[float] = field(default_factory=lambda: [0.90, 0.95, 0.99])
-
+    # App-side naming
     benchmark_symbol: str = "^GSPC"
-    cash_symbol: str = "BIL"
     default_start_date: str = "2019-01-01"
 
-    initial_capital: float = 100000.0
+    # Legacy/original-engine naming
+    benchmark: str = "^GSPC"
+    as_of_date: str = field(
+        default_factory=lambda: (pd.Timestamp.today().normalize()).strftime("%Y-%m-%d")
+    )
+    lookback_years: int = 6
+
+    risk_free_rate: float = 0.03
+
+    # =====================================================
+    # Portfolio construction settings
+    # =====================================================
+    min_weight: float = 0.00
+    max_weight: float = 0.20
+    max_category_weight: float = 0.35
+    allow_short: bool = False
+
+    # =====================================================
+    # Model / estimation controls
+    # =====================================================
+    covariance_method: str = "ledoit_wolf"
+    expected_return_method: str = "historical_mean"
+    correlation_method: str = "pearson"
+    use_log_returns: bool = False
+
+    # =====================================================
+    # Risk / diagnostics controls
+    # =====================================================
     min_observations: int = 60
     rolling_window: int = 63
-    ewma_lambda: float = 0.94
-    use_log_returns: bool = False
-    allow_short: bool = False
-    max_assets: int = 30
+    confidence_levels: Tuple[float, ...] = (0.90, 0.95, 0.99)
+
+    # =====================================================
+    # Optimization controls
+    # =====================================================
+    turnover_penalty: float = 0.005
+    transaction_cost_bps: float = 10.0
+    tracking_error_target: float = 0.06
+
+    # =====================================================
+    # Data / runtime controls
+    # =====================================================
+    data_timeout_seconds: int = 30
+    enable_caching: bool = True
+    cache_size: int = 128
+
+    # =====================================================
+    # Frontier / FinQuant controls
+    # =====================================================
+    n_efficient_frontier_points: int = 50
+    finquant_mc_trials: int = 8000
+
+    # =====================================================
+    # Universe selection
+    # =====================================================
     selected_universe: str = "institutional_multi_asset"
 
-    expected_return_method: str = "historical_mean"
-    covariance_method: str = "sample_cov"
-    correlation_method: str = "pearson"
+    # Optional explicit asset universe override
+    asset_universe: Dict[str, List[str]] = field(default_factory=dict)
 
-    output_dir: str = "outputs"
-    report_dir: str = "reports"
-    chart_height: int = 520
-    chart_width: Optional[int] = None
-
-    default_symbols: List[str] = field(default_factory=lambda: [
-        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"
-    ])
-
-    benchmark_map: Dict[str, str] = field(default_factory=lambda: {
-        "US Equities": "^GSPC",
-        "Gold": "GLD",
-        "Turkey": "XU100.IS",
-        "World": "URTH",
-    })
-
-    scenario_families: List[str] = field(default_factory=lambda: [
-        "crisis",
-        "inflation",
-        "banking_stress",
-        "sharp_rally",
-        "sharp_selloff",
-    ])
-
-    optimizer_settings: Dict[str, Any] = field(default_factory=dict)
-    data_settings: Dict[str, Any] = field(default_factory=dict)
-    stress_test_settings: Dict[str, Any] = field(default_factory=dict)
+    # =====================================================
+    # Reporting
+    # =====================================================
+    report_file: str = field(
+        default_factory=lambda: f"qfa_quant_platform_{datetime.today().strftime('%Y%m%d_%H%M')}.html"
+    )
 
     def __post_init__(self) -> None:
-        if self.trading_days <= 0:
-            self.trading_days = 252
+        # ---------------------------------------------
+        # Benchmark alias reconciliation
+        # ---------------------------------------------
+        if self.benchmark_symbol and not self.benchmark:
+            self.benchmark = self.benchmark_symbol
+        elif self.benchmark and not self.benchmark_symbol:
+            self.benchmark_symbol = self.benchmark
 
-        self.annual_trading_days = int(self.trading_days)
+        # keep both aligned
+        self.benchmark = self.benchmark_symbol
 
-        cleaned_levels = []
-        for level in self.confidence_levels:
-            try:
-                val = float(level)
-                if 0 < val < 1:
-                    cleaned_levels.append(val)
-            except (TypeError, ValueError):
-                continue
+        # ---------------------------------------------
+        # Start-date / lookback reconciliation
+        # ---------------------------------------------
+        # If app explicitly provides default_start_date, use it.
+        # Otherwise infer from lookback_years and as_of_date.
+        if not self.default_start_date:
+            inferred_start = pd.Timestamp(self.as_of_date) - pd.DateOffset(years=self.lookback_years)
+            self.default_start_date = inferred_start.strftime("%Y-%m-%d")
 
-        if 0 < float(self.confidence_level) < 1 and self.confidence_level not in cleaned_levels:
-            cleaned_levels.append(float(self.confidence_level))
+        # If a selected universe exists, populate asset_universe
+        # from central registry when not explicitly supplied.
+        if not self.asset_universe:
+            tickers = get_universe_tickers(self.selected_universe) if self.selected_universe in UNIVERSE_REGISTRY else []
+            if tickers:
+                self.asset_universe = {
+                    "SelectedUniverse": tickers
+                }
 
-        if not cleaned_levels:
-            cleaned_levels = [0.90, 0.95, 0.99]
+        # Final fallback if still empty
+        if not self.asset_universe:
+            fallback = UNIVERSE_REGISTRY.get("institutional_multi_asset", [])
+            self.asset_universe = {
+                "SelectedUniverse": list(fallback)
+            }
 
-        self.confidence_levels = sorted(set(cleaned_levels))
-        self.validate()
+        # Basic numeric sanitation
+        self.initial_capital = float(self.initial_capital)
+        self.risk_free_rate = float(self.risk_free_rate)
+        self.min_weight = float(self.min_weight)
+        self.max_weight = float(self.max_weight)
+        self.max_category_weight = float(self.max_category_weight)
+        self.turnover_penalty = float(self.turnover_penalty)
+        self.transaction_cost_bps = float(self.transaction_cost_bps)
+        self.tracking_error_target = float(self.tracking_error_target)
+        self.min_observations = int(self.min_observations)
+        self.rolling_window = int(self.rolling_window)
+        self.data_timeout_seconds = int(self.data_timeout_seconds)
+        self.cache_size = int(self.cache_size)
+        self.n_efficient_frontier_points = int(self.n_efficient_frontier_points)
+        self.finquant_mc_trials = int(self.finquant_mc_trials)
 
-    def validate(self) -> None:
-        if not 0 <= self.risk_free_rate <= 1:
-            raise ValueError("risk_free_rate must be between 0 and 1.")
-        if self.trading_days <= 0:
-            raise ValueError("trading_days must be positive.")
-        if self.annual_trading_days <= 0:
-            raise ValueError("annual_trading_days must be positive.")
-        if self.initial_capital <= 0:
-            raise ValueError("initial_capital must be positive.")
+        # Sensible bounds
+        if self.max_weight < self.min_weight:
+            self.max_weight = self.min_weight
+
+        if self.max_category_weight < self.max_weight:
+            self.max_category_weight = max(self.max_category_weight, self.max_weight)
+
         if self.min_observations < 20:
-            raise ValueError("min_observations must be at least 20.")
+            self.min_observations = 20
+
         if self.rolling_window < 20:
-            raise ValueError("rolling_window must be at least 20.")
-        if not 0 < self.confidence_level < 1:
-            raise ValueError("confidence_level must be between 0 and 1.")
-        if not self.confidence_levels:
-            raise ValueError("confidence_levels cannot be empty.")
-        if any((cl <= 0 or cl >= 1) for cl in self.confidence_levels):
-            raise ValueError("All confidence_levels must be between 0 and 1.")
-        if not 0 < self.ewma_lambda < 1:
-            raise ValueError("ewma_lambda must be between 0 and 1.")
-        if self.max_assets <= 0:
-            raise ValueError("max_assets must be positive.")
+            self.rolling_window = 20
+
+        if not self.selected_universe:
+            self.selected_universe = "institutional_multi_asset"
+
+    # =====================================================
+    # Legacy / engine-compatible properties
+    # =====================================================
+    @property
+    def start_date(self) -> str:
+        """
+        Legacy compatibility for older engine/data manager code.
+        """
+        return self.default_start_date
+
+    @property
+    def end_date(self) -> str:
+        """
+        Legacy compatibility for original data manager code.
+        """
+        return self.as_of_date
+
+    @property
+    def assets(self) -> List[str]:
+        """
+        Flattened asset list across categories.
+        Used by older ProfessionalDataManager logic.
+        """
+        out: List[str] = []
+        for _, names in self.asset_universe.items():
+            out.extend(names)
+        out = [str(x).strip().upper() for x in out if str(x).strip()]
+        out = list(dict.fromkeys(out))
+        return out
+
+    @property
+    def asset_categories(self) -> Dict[str, str]:
+        """
+        Mapping ticker -> category.
+        Useful for category limits and reporting.
+        """
+        mapping: Dict[str, str] = {}
+        for category, names in self.asset_universe.items():
+            for ticker in names:
+                mapping[str(ticker).strip().upper()] = str(category)
+        return mapping
+
+    @property
+    def universe_tickers(self) -> List[str]:
+        """
+        App/engine helper for selected universe only.
+        """
+        return get_universe_tickers(self.selected_universe)
+
+    # =====================================================
+    # Utility
+    # =====================================================
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "initial_capital": self.initial_capital,
+            "annual_trading_days": self.annual_trading_days,
+            "benchmark_symbol": self.benchmark_symbol,
+            "benchmark": self.benchmark,
+            "default_start_date": self.default_start_date,
+            "as_of_date": self.as_of_date,
+            "lookback_years": self.lookback_years,
+            "risk_free_rate": self.risk_free_rate,
+            "min_weight": self.min_weight,
+            "max_weight": self.max_weight,
+            "max_category_weight": self.max_category_weight,
+            "allow_short": self.allow_short,
+            "covariance_method": self.covariance_method,
+            "expected_return_method": self.expected_return_method,
+            "correlation_method": self.correlation_method,
+            "use_log_returns": self.use_log_returns,
+            "min_observations": self.min_observations,
+            "rolling_window": self.rolling_window,
+            "confidence_levels": self.confidence_levels,
+            "turnover_penalty": self.turnover_penalty,
+            "transaction_cost_bps": self.transaction_cost_bps,
+            "tracking_error_target": self.tracking_error_target,
+            "data_timeout_seconds": self.data_timeout_seconds,
+            "enable_caching": self.enable_caching,
+            "cache_size": self.cache_size,
+            "n_efficient_frontier_points": self.n_efficient_frontier_points,
+            "finquant_mc_trials": self.finquant_mc_trials,
+            "selected_universe": self.selected_universe,
+            "asset_universe": self.asset_universe,
+            "report_file": self.report_file,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "assets": self.assets,
+            "asset_categories": self.asset_categories,
+        }
