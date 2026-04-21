@@ -24,12 +24,6 @@ try:
 except Exception:
     HAS_PYPORTFOLIOOPT = False
 
-try:
-    from finquant.efficient_frontier import EfficientFrontier as FinQuantEfficientFrontier
-    HAS_FINQUANT = True
-except Exception:
-    HAS_FINQUANT = False
-
 
 logger = logging.getLogger("QFA_QUANT_PLATFORM")
 if not logger.handlers:
@@ -56,6 +50,7 @@ class RunDiagnostics:
     strategy_diagnostics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     data_load_time: float = 0.0
     optimization_time: float = 0.0
+    universe_used: Optional[str] = None
 
     def add_info(self, message: str) -> None:
         logger.info(message)
@@ -109,6 +104,10 @@ def _annual_factor(config) -> int:
 # Data manager
 # =========================================================
 class ProfessionalDataManager:
+    """
+    Resilient Yahoo Finance loader with universe fallback logic.
+    """
+
     def __init__(self, config, diagnostics: RunDiagnostics):
         self.config = config
         self.diagnostics = diagnostics
@@ -121,9 +120,13 @@ class ProfessionalDataManager:
         self.asset_metadata = pd.DataFrame()
         self.instruments_list: List[str] = []
 
+    # -----------------------------------------------------
+    # Download helpers
+    # -----------------------------------------------------
     def _download_single(self, ticker: str) -> tuple[pd.Series, Dict[str, Any]]:
         last_error = None
-        for attempt in range(3):
+
+        for attempt in range(4):
             try:
                 t = yf.Ticker(ticker)
                 hist = t.history(
@@ -134,11 +137,14 @@ class ProfessionalDataManager:
                 info = getattr(t, "info", {}) or {}
 
                 if hist.empty or "Close" not in hist.columns:
-                    raise ValueError("No close history")
+                    raise ValueError("No close history returned")
 
                 close = hist["Close"].copy()
                 if getattr(close.index, "tz", None) is not None:
                     close.index = close.index.tz_localize(None)
+
+                if close.dropna().empty:
+                    raise ValueError("Close history is empty after cleaning")
 
                 meta = {
                     "ticker": ticker,
@@ -149,22 +155,23 @@ class ProfessionalDataManager:
                     "source": "yahoo",
                 }
                 return close, meta
+
             except Exception as exc:
                 last_error = exc
-                time.sleep(1.0 + attempt + random.uniform(0.2, 0.7))
+                time.sleep(1.0 + attempt * 1.2 + random.uniform(0.2, 0.8))
+
         raise ValueError(str(last_error))
 
-    def load(self) -> None:
-        start_time = time.time()
+    def _try_load_universe(self, tickers: List[str], universe_name: str) -> bool:
         rows = []
         meta_rows = []
         price_map = {}
 
-        assets = list(getattr(self.config, "assets", []))
-        if len(assets) < 2:
-            raise ValueError("Selected universe does not contain enough assets.")
+        self.diagnostics.add_info(
+            f"Attempting universe '{universe_name}' with {len(tickers)} instruments."
+        )
 
-        for ticker in assets:
+        for ticker in tickers:
             try:
                 close, meta = self._download_single(ticker)
 
@@ -174,6 +181,7 @@ class ProfessionalDataManager:
                     continue
 
                 price_map[ticker] = close.rename(ticker)
+
                 rows.append(
                     {
                         "ticker": ticker,
@@ -181,9 +189,10 @@ class ProfessionalDataManager:
                         "observations": int(close.notna().sum()),
                     }
                 )
+
                 meta_rows.append(
                     {
-                        "category": self.config.asset_categories.get(ticker, "Unknown"),
+                        "category": self.config.asset_categories.get(ticker, "SelectedUniverse"),
                         "ticker": ticker,
                         "name": meta.get("name", ticker),
                         "exchange": meta.get("exchange", ""),
@@ -192,11 +201,14 @@ class ProfessionalDataManager:
                         "source": meta.get("source", ""),
                     }
                 )
+
+                time.sleep(0.35 + random.uniform(0.05, 0.25))
+
             except Exception as exc:
                 self.diagnostics.dropped_assets[ticker] = str(exc)
                 meta_rows.append(
                     {
-                        "category": self.config.asset_categories.get(ticker, "Unknown"),
+                        "category": self.config.asset_categories.get(ticker, "SelectedUniverse"),
                         "ticker": ticker,
                         "name": ticker,
                         "exchange": "",
@@ -207,22 +219,93 @@ class ProfessionalDataManager:
                 )
 
         if len(price_map) < 2:
-            raise ValueError(f"Too few assets after download/cleaning: {len(price_map)}")
+            self.diagnostics.add_warning(
+                f"Universe '{universe_name}' failed at download stage. "
+                f"Usable assets: {len(price_map)}"
+            )
+            return False
 
-        prices = pd.concat(price_map.values(), axis=1).sort_index().ffill(limit=3).dropna(how="all")
+        prices = pd.concat(price_map.values(), axis=1).sort_index()
+        prices = prices.ffill(limit=3).dropna(how="all")
+
         returns = prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
-
         returns = returns.dropna(axis=1, thresh=max(20, int(0.6 * len(returns))))
-        prices = prices[returns.columns].copy()
 
         if returns.shape[1] < 2:
-            raise ValueError("Not enough assets remain after return cleaning.")
+            self.diagnostics.add_warning(
+                f"Universe '{universe_name}' failed after return cleaning. "
+                f"Usable assets: {returns.shape[1]}"
+            )
+            return False
+
+        prices = prices[returns.columns].copy()
 
         self.asset_prices = prices.loc[returns.index]
         self.asset_returns = returns
         self.data_quality = pd.DataFrame(rows).sort_values("ticker") if rows else pd.DataFrame()
         self.asset_metadata = pd.DataFrame(meta_rows).sort_values(["category", "ticker"]) if meta_rows else pd.DataFrame()
         self.instruments_list = list(returns.columns)
+        self.diagnostics.universe_used = universe_name
+
+        self.diagnostics.add_info(
+            f"Universe '{universe_name}' loaded successfully with {returns.shape[1]} assets."
+        )
+        return True
+
+    def _fallback_candidates(self) -> List[tuple[str, List[str]]]:
+        """
+        Ordered fallback list. Starts from currently selected universe, then
+        progressively safer alternatives.
+        """
+        selected_name = getattr(self.config, "selected_universe", "institutional_multi_asset")
+        selected_assets = list(getattr(self.config, "assets", []))
+
+        candidates = [(selected_name, selected_assets)]
+
+        safe_defaults = [
+            "institutional_multi_asset",
+            "balanced_60_40_plus",
+            "major_indices_proxy",
+        ]
+
+        for name in safe_defaults:
+            if name != selected_name:
+                try:
+                    from core.universes import get_universe_tickers
+                    tickers = get_universe_tickers(name)
+                    if len(tickers) >= 2:
+                        candidates.append((name, tickers))
+                except Exception:
+                    continue
+
+        # Remove duplicates by universe name
+        seen = set()
+        unique = []
+        for name, tickers in candidates:
+            if name not in seen and len(tickers) >= 2:
+                seen.add(name)
+                unique.append((name, tickers))
+        return unique
+
+    def load(self) -> None:
+        start_time = time.time()
+
+        candidates = self._fallback_candidates()
+        success = False
+
+        for universe_name, tickers in candidates:
+            if self._try_load_universe(tickers, universe_name):
+                success = True
+                self.config.selected_universe = universe_name
+                self.config.asset_universe = {"SelectedUniverse": list(self.instruments_list)}
+                break
+
+        if not success:
+            raise ValueError(
+                "No usable asset price series could be downloaded from Yahoo Finance. "
+                "Likely causes: temporary Yahoo throttling, too many requested instruments, "
+                "or unstable cloud-side requests. Please retry with a smaller universe."
+            )
 
         self._load_benchmark()
         self._align_all()
@@ -233,7 +316,9 @@ class ProfessionalDataManager:
             )
 
         self.diagnostics.data_load_time = time.time() - start_time
-        self.diagnostics.add_info(f"Loaded {self.asset_returns.shape[1]} assets.")
+        self.diagnostics.add_info(
+            f"Loaded final universe '{self.config.selected_universe}' with {self.asset_returns.shape[1]} valid assets."
+        )
 
     def _load_benchmark(self) -> None:
         try:
@@ -242,11 +327,14 @@ class ProfessionalDataManager:
                 end=self.config.end_date,
                 auto_adjust=True,
             )["Close"]
+
             if getattr(b.index, "tz", None) is not None:
                 b.index = b.index.tz_localize(None)
+
             self.benchmark_prices = b
             self.benchmark_returns = b.pct_change().dropna()
             self.diagnostics.benchmark_used = self.config.benchmark
+
         except Exception:
             proxy = self.asset_returns.mean(axis=1)
             self.benchmark_returns = proxy
@@ -259,6 +347,7 @@ class ProfessionalDataManager:
         self.asset_returns = self.asset_returns.loc[common]
         self.asset_prices = self.asset_prices.loc[common]
         self.benchmark_returns = self.benchmark_returns.loc[common]
+
         if not self.benchmark_prices.empty:
             self.benchmark_prices = self.benchmark_prices.loc[self.benchmark_prices.index.intersection(common)]
 
@@ -312,6 +401,7 @@ class ModelInputBuilder:
             vals = np.clip(vals, 1e-10, None)
             cov = pd.DataFrame(vecs @ np.diag(vals) @ vecs.T, index=cov.index, columns=cov.columns)
             self.diagnostics.covariance_repaired = True
+
         return cov
 
 
