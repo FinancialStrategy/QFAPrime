@@ -3,33 +3,18 @@ from __future__ import annotations
 import logging
 import random
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
-from plotly.subplots import make_subplots
-from scipy.cluster import hierarchy
 from scipy.optimize import minimize
-from scipy.spatial.distance import squareform
 from sklearn.decomposition import PCA
 
-try:
-    from pypfopt import EfficientFrontier, expected_returns, objective_functions
-    from pypfopt import risk_models as pypfopt_risk_models
-    from pypfopt.black_litterman import BlackLittermanModel, market_implied_risk_aversion
-    HAS_PYPORTFOLIOOPT = True
-except Exception:
-    HAS_PYPORTFOLIOOPT = False
-
-try:
-    from finquant.efficient_frontier import EfficientFrontier as FinQuantEfficientFrontier
-    HAS_FINQUANT = True
-except Exception:
-    HAS_FINQUANT = False
+from core.universes import UNIVERSE_REGISTRY, get_universe_tickers
 
 
 logger = logging.getLogger("QFA_QUANT_PLATFORM")
@@ -40,57 +25,20 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 
-# =========================================================
-# Utilities
-# =========================================================
-@contextmanager
-def timeout_context(seconds: int):
-    yield
-
-
-class SimpleCache:
-    def __init__(self, maxsize: int = 128):
-        self.maxsize = maxsize
-        self._cache: Dict[str, Any] = {}
-
-    def get(self, key: str) -> Optional[Any]:
-        return self._cache.get(key)
-
-    def set(self, key: str, value: Any) -> None:
-        if len(self._cache) >= self.maxsize:
-            self._cache.pop(next(iter(self._cache)))
-        self._cache[key] = value
-
-    def clear(self) -> None:
-        self._cache.clear()
-
-
 @dataclass
 class RunDiagnostics:
-    dropped_assets: Dict[str, str] = field(default_factory=dict)
-    info: List[str] = field(default_factory=list)
     warnings_list: List[str] = field(default_factory=list)
     errors_list: List[str] = field(default_factory=list)
-
-    benchmark_used: Optional[str] = None
-    covariance_repaired: bool = False
-    covariance_method_used: Optional[str] = None
-    expected_return_method_used: Optional[str] = None
-    strategy_diagnostics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    data_load_time: float = 0.0
-    optimization_time: float = 0.0
-
-    def add_info(self, message: str) -> None:
-        logger.info(message)
-        self.info.append(message)
+    info: List[str] = field(default_factory=list)
 
     def add_warning(self, message: str) -> None:
-        logger.warning(message)
-        self.warnings_list.append(message)
+        self.warnings_list.append(str(message))
 
     def add_error(self, message: str) -> None:
-        logger.error(message)
-        self.errors_list.append(message)
+        self.errors_list.append(str(message))
+
+    def add_info(self, message: str) -> None:
+        self.info.append(str(message))
 
     def summary(self) -> Dict[str, List[str]]:
         return {
@@ -108,24 +56,12 @@ class StrategyResult:
     diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
-def _annualization_factor(config) -> int:
-    return int(getattr(config, "annual_trading_days", 252))
-
-
-def _safe_div(a: float, b: float, default: float = np.nan) -> float:
-    if b is None or pd.isna(b) or abs(float(b)) < 1e-12:
-        return default
-    return float(a) / float(b)
-
-
 def _normalize_weights_dict(weights: Dict[str, float]) -> Dict[str, float]:
     s = pd.Series(weights, dtype=float).replace([np.inf, -np.inf], np.nan).fillna(0.0)
     total = float(s.sum())
     if abs(total) < 1e-12:
         n = len(s)
-        if n == 0:
-            return {}
-        return {k: 1.0 / n for k in s.index}
+        return {k: 1.0 / n for k in s.index} if n > 0 else {}
     s = s / total
     return {k: float(v) for k, v in s.items()}
 
@@ -136,628 +72,245 @@ def _drawdown_series(return_series: pd.Series) -> pd.Series:
     return wealth / peak - 1.0
 
 
-def _max_drawdown(return_series: pd.Series) -> float:
-    dd = _drawdown_series(return_series)
-    return float(dd.min()) if not dd.empty else np.nan
-
-
-def _historical_var(series: pd.Series, alpha: float = 0.05) -> float:
-    s = series.dropna()
-    if s.empty:
-        return np.nan
-    return float(np.quantile(s, alpha))
-
-
-def _historical_cvar(series: pd.Series, alpha: float = 0.05) -> float:
-    s = series.dropna()
-    if s.empty:
-        return np.nan
-    var = np.quantile(s, alpha)
-    tail = s[s <= var]
-    return float(tail.mean()) if not tail.empty else np.nan
-
-
-def _profit_factor(series: pd.Series) -> float:
-    s = series.dropna()
-    if s.empty:
-        return np.nan
-    gains = s[s > 0].sum()
-    losses = -s[s < 0].sum()
-    if losses <= 0:
-        return np.nan
-    return float(gains / losses)
-
-
-# =========================================================
-# Data Manager
-# =========================================================
-class ProfessionalDataManager:
-    def __init__(self, config, diagnostics: RunDiagnostics):
+class ProfessionalPortfolioEngine:
+    def __init__(
+        self,
+        config,
+        bl_controls: Optional[Dict[str, Any]] = None,
+        scenario_controls: Optional[Dict[str, Any]] = None,
+    ):
         self.config = config
-        self.diagnostics = diagnostics
-        self.cache = SimpleCache(getattr(config, "cache_size", 128)) if getattr(config, "enable_caching", True) else None
+        self.bl_controls = bl_controls or {}
+        self.scenario_controls = scenario_controls or {}
 
-        self.asset_prices = pd.DataFrame()
-        self.asset_returns = pd.DataFrame()
-        self.benchmark_prices = pd.Series(dtype=float)
+        self.diagnostics = RunDiagnostics()
+        self.metrics: Dict[str, Dict[str, Any]] = {}
+        self.metrics_df = pd.DataFrame()
+        self.strategy_df = pd.DataFrame()
+        self.stress_df = pd.DataFrame()
+        self.stress_table = pd.DataFrame()
+        self.risk_contrib_df = pd.DataFrame()
+        self.rolling_beta_df = pd.DataFrame()
+        self.beta_summary_df = pd.DataFrame()
+        self.factor_pca_df = pd.DataFrame()
+        self.charts: Dict[str, Any] = {}
+        self.finquant_charts: Dict[str, Any] = {}
+
+        self.prices = pd.DataFrame()
+        self.returns = pd.DataFrame()
         self.benchmark_returns = pd.Series(dtype=float)
-        self.data_quality = pd.DataFrame()
-        self.asset_metadata = pd.DataFrame()
-        self.instruments_list: List[str] = []
 
-    def _download_single(self, ticker: str) -> Tuple[pd.Series, Dict[str, Any]]:
-        cache_key = f"{ticker}_{self.config.start_date}_{self.config.end_date}"
-        if self.cache:
-            cached = self.cache.get(cache_key)
-            if cached is not None:
-                return cached.copy(), {
-                    "ticker": ticker,
-                    "name": ticker,
-                    "exchange": "",
-                    "currency": "",
-                    "type": "",
-                    "source": "cache",
-                }
+    def _resolve_universe(self) -> List[str]:
+        selected_universe = getattr(self.config, "selected_universe", "institutional_multi_asset")
 
-        last_error = None
-        for attempt in range(3):
+        tickers = get_universe_tickers(selected_universe)
+
+        if len(tickers) < 2:
+            fallback = get_universe_tickers("institutional_multi_asset")
+            self.diagnostics.add_warning(
+                f"Universe '{selected_universe}' was invalid. Falling back to 'institutional_multi_asset'."
+            )
+            tickers = fallback
+            self.config.selected_universe = "institutional_multi_asset"
+
+        if len(tickers) < 2:
+            raise ValueError(
+                f"Selected universe '{selected_universe}' does not contain enough assets. Resolved tickers: {tickers}"
+            )
+
+        self.diagnostics.add_info(f"Resolved universe '{self.config.selected_universe}' with tickers: {tickers}")
+        return tickers
+
+    def _download_prices(self, tickers: List[str]) -> pd.DataFrame:
+        price_map = {}
+        for ticker in tickers:
             try:
-                t = yf.Ticker(ticker)
-                hist = t.history(
+                hist = yf.Ticker(ticker).history(
                     start=self.config.start_date,
                     end=self.config.end_date,
                     auto_adjust=True,
                 )
-                info = getattr(t, "info", {}) or {}
-
                 if hist.empty or "Close" not in hist.columns:
-                    raise ValueError("No close history")
-
+                    self.diagnostics.add_warning(f"{ticker}: no close history")
+                    continue
                 close = hist["Close"].copy()
                 if getattr(close.index, "tz", None) is not None:
                     close.index = close.index.tz_localize(None)
-
-                if self.cache:
-                    self.cache.set(cache_key, close)
-
-                meta = {
-                    "ticker": ticker,
-                    "name": info.get("longName") or info.get("shortName") or ticker,
-                    "exchange": info.get("exchange") or "",
-                    "currency": info.get("currency") or "",
-                    "type": info.get("quoteType") or "",
-                    "source": "yahoo",
-                }
-                return close, meta
-            except Exception as exc:
-                last_error = exc
-                time.sleep(1.0 + attempt + random.uniform(0.25, 0.8))
-
-        raise ValueError(str(last_error))
-
-    def load(self) -> None:
-        start_time = time.time()
-
-        rows = []
-        meta_rows = []
-        price_map = {}
-
-        assets = list(getattr(self.config, "assets", []))
-        if len(assets) < 2:
-            raise ValueError("Selected universe does not contain enough assets.")
-
-        for ticker in assets:
-            try:
-                close, meta = self._download_single(ticker)
-
-                valid_ratio = float(close.notna().mean())
-                if valid_ratio < 0.70:
-                    self.diagnostics.dropped_assets[ticker] = f"Insufficient history ({valid_ratio:.1%})"
-                    continue
-
                 price_map[ticker] = close.rename(ticker)
-                rows.append(
-                    {
-                        "ticker": ticker,
-                        "valid_ratio": valid_ratio,
-                        "observations": int(close.notna().sum()),
-                    }
-                )
-                meta_rows.append(
-                    {
-                        "category": self.config.asset_categories.get(ticker, "Unknown"),
-                        "ticker": ticker,
-                        "name": meta.get("name", ticker),
-                        "exchange": meta.get("exchange", ""),
-                        "currency": meta.get("currency", ""),
-                        "type": meta.get("type", ""),
-                        "source": meta.get("source", ""),
-                    }
-                )
+                time.sleep(0.4 + random.uniform(0.1, 0.3))
             except Exception as exc:
-                self.diagnostics.dropped_assets[ticker] = str(exc)
-                meta_rows.append(
-                    {
-                        "category": self.config.asset_categories.get(ticker, "Unknown"),
-                        "ticker": ticker,
-                        "name": ticker,
-                        "exchange": "",
-                        "currency": "",
-                        "type": "",
-                        "source": "failed",
-                    }
-                )
+                self.diagnostics.add_warning(f"{ticker}: {exc}")
 
         if len(price_map) < 2:
-            raise ValueError(f"Too few assets after download/cleaning: {len(price_map)}")
+            raise ValueError(f"Too few assets downloaded successfully: {len(price_map)}")
 
-        prices = pd.concat(price_map.values(), axis=1).sort_index()
-        prices = prices.ffill(limit=3).dropna(how="all")
-        returns = prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
+        prices = pd.concat(price_map.values(), axis=1).sort_index().ffill(limit=3).dropna(how="all")
+        return prices
 
-        returns = returns.dropna(axis=1, thresh=max(20, int(0.6 * len(returns))))
-        prices = prices[returns.columns].copy()
-
-        if returns.shape[1] < 2:
-            raise ValueError("Not enough assets remain after return cleaning.")
-
-        self.asset_prices = prices.loc[returns.index]
-        self.asset_returns = returns
-        self.data_quality = pd.DataFrame(rows).sort_values("ticker") if rows else pd.DataFrame()
-        self.asset_metadata = pd.DataFrame(meta_rows).sort_values(["category", "ticker"]) if meta_rows else pd.DataFrame()
-        self.instruments_list = list(returns.columns)
-
-        self._load_benchmark()
-        self._align_all()
-
-        if self.asset_returns.shape[0] < int(getattr(self.config, "min_observations", 60)):
-            raise ValueError(
-                f"Not enough observations after alignment: {self.asset_returns.shape[0]} < {self.config.min_observations}"
-            )
-
-        self.diagnostics.data_load_time = time.time() - start_time
-        self.diagnostics.add_info(f"Loaded {self.asset_returns.shape[1]} assets.")
-
-    def _load_benchmark(self) -> None:
+    def _download_benchmark(self) -> pd.Series:
         try:
             b = yf.Ticker(self.config.benchmark).history(
                 start=self.config.start_date,
                 end=self.config.end_date,
-                auto_adjust=True
+                auto_adjust=True,
             )["Close"]
             if getattr(b.index, "tz", None) is not None:
                 b.index = b.index.tz_localize(None)
-            self.benchmark_prices = b
-            self.benchmark_returns = b.pct_change().dropna()
-            self.diagnostics.benchmark_used = self.config.benchmark
-        except Exception:
-            proxy = self.asset_returns.mean(axis=1)
-            self.benchmark_returns = proxy
-            self.benchmark_prices = (1 + proxy).cumprod()
-            self.diagnostics.benchmark_used = "EqualWeightProxy"
-            self.diagnostics.add_warning("Benchmark download failed. EqualWeightProxy is being used.")
+            return b.pct_change().dropna()
+        except Exception as exc:
+            self.diagnostics.add_warning(f"Benchmark download failed: {exc}")
+            return pd.Series(dtype=float)
 
-    def _align_all(self) -> None:
-        common = self.asset_returns.index.intersection(self.benchmark_returns.index)
-        self.asset_returns = self.asset_returns.loc[common]
-        self.asset_prices = self.asset_prices.loc[common]
-        self.benchmark_returns = self.benchmark_returns.loc[common]
-        if not self.benchmark_prices.empty:
-            self.benchmark_prices = self.benchmark_prices.loc[self.benchmark_prices.index.intersection(common)]
-
-
-# =========================================================
-# Input Builder
-# =========================================================
-class ModelInputBuilder:
-    def __init__(self, config, diagnostics: RunDiagnostics):
-        self.config = config
-        self.diagnostics = diagnostics
-
-    def build_expected_returns(self, returns: pd.DataFrame, benchmark_returns: pd.Series) -> pd.Series:
-        self.diagnostics.expected_return_method_used = self.config.expected_return_method
-        ann = _annualization_factor(self.config)
-
-        if HAS_PYPORTFOLIOOPT:
-            price_like = (1 + returns).cumprod()
-
-            if self.config.expected_return_method == "historical_mean":
-                mu = expected_returns.mean_historical_return(price_like, frequency=ann)
-            elif self.config.expected_return_method == "capm":
-                mu = expected_returns.capm_return(
-                    price_like,
-                    market_prices=(1 + benchmark_returns).cumprod().to_frame("benchmark"),
-                    risk_free_rate=self.config.risk_free_rate,
-                    frequency=ann,
-                )
-            else:
-                mu = expected_returns.ema_historical_return(price_like, frequency=ann)
-
-            return mu.replace([np.inf, -np.inf], np.nan).dropna()
-
-        # fallback
-        if self.config.expected_return_method == "capm":
-            aligned = pd.concat([returns, benchmark_returns.rename("benchmark")], axis=1).dropna()
-            bench = aligned["benchmark"]
-            mus = {}
-            for col in returns.columns:
-                r = aligned[col]
-                var_b = np.var(bench, ddof=1)
-                beta = np.cov(r, bench, ddof=1)[0, 1] / var_b if var_b > 0 else 1.0
-                ann_rb = bench.mean() * ann
-                mus[col] = self.config.risk_free_rate + beta * (ann_rb - self.config.risk_free_rate)
-            mu = pd.Series(mus)
-        elif self.config.expected_return_method == "ema_historical":
-            mu = returns.ewm(span=60).mean().iloc[-1] * ann
-        else:
-            mu = returns.mean() * ann
-
-        return mu.replace([np.inf, -np.inf], np.nan).dropna()
-
-    def build_covariance(self, prices: pd.DataFrame) -> pd.DataFrame:
-        self.diagnostics.covariance_method_used = self.config.covariance_method
-        ann = _annualization_factor(self.config)
-
-        if HAS_PYPORTFOLIOOPT:
-            if self.config.covariance_method in {"sample_cov", "sample"}:
-                cov = pypfopt_risk_models.sample_cov(prices, frequency=ann)
-            elif self.config.covariance_method == "shrinkage":
-                cov = pypfopt_risk_models.CovarianceShrinkage(prices, frequency=ann).shrunk_covariance(0.2)
-            else:
-                cov = pypfopt_risk_models.CovarianceShrinkage(prices, frequency=ann).ledoit_wolf()
-        else:
-            returns = prices.pct_change().dropna()
-            cov = returns.cov() * ann
+    def _estimate_inputs(self):
+        ann = 252
+        mu = self.returns.mean() * ann
+        cov = self.returns.cov() * ann
 
         vals, vecs = np.linalg.eigh(cov.values)
         if vals.min() < 0:
             vals = np.clip(vals, 1e-10, None)
             cov = pd.DataFrame(vecs @ np.diag(vals) @ vecs.T, index=cov.index, columns=cov.columns)
-            self.diagnostics.covariance_repaired = True
 
-        return cov
+        return mu, cov
 
-
-# =========================================================
-# Optimizer
-# =========================================================
-class ProfessionalOptimizer:
-    def __init__(self, mu, cov, returns, benchmark_returns, config, diagnostics, current_weights=None):
-        common = mu.index.intersection(cov.index).intersection(returns.columns)
-        self.mu = mu.loc[common]
-        self.cov = cov.loc[common, common]
-        self.returns = returns[common]
-
-        self.benchmark_returns = benchmark_returns.reindex(self.returns.index).dropna()
-        self.returns = self.returns.loc[self.benchmark_returns.index]
-
-        self.config = config
-        self.diagnostics = diagnostics
-        self.category_map = {k: v for k, v in config.asset_categories.items() if k in common}
-        self.current_weights = pd.Series(
-            current_weights or {a: 1 / len(common) for a in common},
-            dtype=float
-        ).reindex(common).fillna(0.0)
-        self.current_weights = self.current_weights / self.current_weights.sum()
-
-    def _validate(self, name: str, result: StrategyResult) -> None:
-        total = sum(result.weights.values())
-        if not np.isclose(total, 1.0, atol=1e-4):
-            raise ValueError(f"{name}: weights sum to {total:.6f}")
-
-    def _attach_costs(self, result: StrategyResult) -> StrategyResult:
-        wn = pd.Series(result.weights).reindex(self.mu.index).fillna(0.0)
-        turnover = float(np.abs(wn - self.current_weights).sum())
-        tc = turnover * (self.config.transaction_cost_bps / 10000.0) * self.config.initial_capital
-        result.diagnostics.update(
-            {
-                "turnover": turnover,
-                "estimated_transaction_cost_usd": tc,
-            }
-        )
-        return result
-
-    def _bounds(self):
-        if self.config.allow_short:
-            return [(-1.0, 1.0)] * len(self.mu)
-        return [(self.config.min_weight, self.config.max_weight)] * len(self.mu)
-
-    def _normalize_result(self, w: np.ndarray) -> Dict[str, float]:
-        return _normalize_weights_dict({a: float(v) for a, v in zip(self.mu.index, w)})
-
-    def max_sharpe(self) -> StrategyResult:
-        if HAS_PYPORTFOLIOOPT:
-            ef = EfficientFrontier(self.mu, self.cov, weight_bounds=(0, 1) if not self.config.allow_short else (-1, 1))
-            ef.max_sharpe(risk_free_rate=self.config.risk_free_rate)
-            return StrategyResult(_normalize_weights_dict(ef.clean_weights()), "max_sharpe", "Sharpe-optimal portfolio")
-
-        n = len(self.mu)
-        x0 = np.repeat(1.0 / n, n)
-        bounds = self._bounds()
-        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-
-        def obj(w):
-            pret = float(np.dot(w, self.mu.values))
-            pvol = float(np.sqrt(max(w @ self.cov.values @ w, 1e-12)))
-            return -((pret - self.config.risk_free_rate) / pvol)
-
-        res = minimize(obj, x0, bounds=bounds, constraints=cons, method="SLSQP")
-        if not res.success:
-            raise RuntimeError(res.message)
-        return StrategyResult(self._normalize_result(res.x), "max_sharpe", "Sharpe-optimal portfolio")
-
-    def min_volatility(self) -> StrategyResult:
-        if HAS_PYPORTFOLIOOPT:
-            ef = EfficientFrontier(self.mu, self.cov, weight_bounds=(0, 1) if not self.config.allow_short else (-1, 1))
-            ef.min_volatility()
-            return StrategyResult(_normalize_weights_dict(ef.clean_weights()), "min_volatility", "Minimum volatility portfolio")
-
-        n = len(self.mu)
-        x0 = np.repeat(1.0 / n, n)
-        bounds = self._bounds()
-        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-
-        def obj(w):
-            return float(w @ self.cov.values @ w)
-
-        res = minimize(obj, x0, bounds=bounds, constraints=cons, method="SLSQP")
-        if not res.success:
-            raise RuntimeError(res.message)
-        return StrategyResult(self._normalize_result(res.x), "min_volatility", "Minimum volatility portfolio")
-
-    def equal_weight(self) -> StrategyResult:
-        n = len(self.mu)
-        return StrategyResult({a: 1 / n for a in self.mu.index}, "equal_weight", "Equal-weight benchmark")
-
-    def inverse_volatility(self) -> StrategyResult:
-        vol = np.sqrt(np.diag(self.cov.values))
-        inv = 1 / np.maximum(vol, 1e-12)
-        inv = inv / inv.sum()
-        return StrategyResult({a: float(w) for a, w in zip(self.mu.index, inv)}, "inverse_volatility", "Inverse-volatility allocation")
-
-    def equal_risk_contribution(self) -> StrategyResult:
-        n = len(self.mu)
-        x0 = np.ones(n) / n
-        bounds = self._bounds()
-        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-
-        def obj(w):
-            s = self.cov.values
-            pv = float(w @ s @ w)
-            if pv <= 0:
-                return 1e6
-            rc = w * (s @ w) / np.sqrt(pv)
-            target = np.mean(rc)
-            turnover = np.sum(np.abs(w - self.current_weights.values))
-            return float(np.sum((rc - target) ** 2) + self.config.turnover_penalty * turnover)
-
-        res = minimize(obj, x0=x0, bounds=bounds, constraints=cons, method="SLSQP")
-        if not res.success:
-            raise RuntimeError(res.message)
-
-        return StrategyResult(
-            self._normalize_result(res.x),
-            "erc",
-            "Equal risk contribution",
-            {"optimizer_status": res.message},
-        )
-
-    def maximum_diversification(self) -> StrategyResult:
-        n = len(self.mu)
-        vols = np.sqrt(np.diag(self.cov.values))
-        x0 = np.ones(n) / n
-        bounds = self._bounds()
-        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-
-        def obj(w):
-            denom = float(np.sqrt(max(w @ self.cov.values @ w, 1e-12)))
-            turnover = np.sum(np.abs(w - self.current_weights.values))
-            return float(-(w @ vols) / denom + self.config.turnover_penalty * turnover)
-
-        res = minimize(obj, x0=x0, bounds=bounds, constraints=cons, method="SLSQP")
-        if not res.success:
-            raise RuntimeError(res.message)
-
-        return StrategyResult(
-            self._normalize_result(res.x),
-            "max_diversification",
-            "Maximum diversification",
-            {"optimizer_status": res.message},
-        )
-
-    def hrp(self) -> StrategyResult:
-        corr = self.returns.corr().clip(-1, 1)
-        dist = np.sqrt((1 - corr) / 2)
-        condensed = squareform(dist.values, checks=False)
-        link = hierarchy.linkage(condensed, method="ward")
-        ordered_idx = self._get_quasi_diag(link)
-        ordered_assets = corr.index[ordered_idx].tolist()
-        weights = pd.Series(1.0 / len(ordered_assets), index=ordered_assets)
-
-        def cluster_variance(items):
-            cov_slice = self.cov.loc[items, items]
-            inv_diag = 1 / np.maximum(np.diag(cov_slice.values), 1e-12)
-            parity_w = inv_diag / inv_diag.sum()
-            return float(parity_w @ cov_slice.values @ parity_w)
-
-        def bisect(items, w):
-            if len(items) <= 1:
-                return w
-            mid = len(items) // 2
-            left = items[:mid]
-            right = items[mid:]
-            v_left = cluster_variance(left)
-            v_right = cluster_variance(right)
-            alpha = 1 - v_left / (v_left + v_right) if (v_left + v_right) > 0 else 0.5
-            w[left] *= alpha
-            w[right] *= 1 - alpha
-            w = bisect(left, w)
-            w = bisect(right, w)
-            return w
-
-        weights = bisect(ordered_assets, weights)
-        weights = weights / weights.sum()
-        return StrategyResult(_normalize_weights_dict(weights.to_dict()), "hrp", "Hierarchical Risk Parity", {"hrp_order": ordered_assets})
-
-    def black_litterman(self) -> StrategyResult:
-        if not HAS_PYPORTFOLIOOPT:
-            return self.max_sharpe()
-
-        benchmark_prices = (1 + self.benchmark_returns).cumprod().rename("benchmark")
-        delta = market_implied_risk_aversion(benchmark_prices.to_frame(), frequency=_annualization_factor(self.config))
-        w_mkt = pd.Series(1.0, index=self.mu.index) / len(self.mu)
-        pi = delta * (self.cov @ w_mkt)
-
-        views = {}
-        if "GLD" in self.mu.index:
-            views["GLD"] = float(max(self.mu.loc["GLD"], 0.03))
-        if "QQQ" in self.mu.index:
-            views["QQQ"] = float(max(self.mu.loc["QQQ"], 0.05))
-
-        bl = BlackLittermanModel(self.cov, pi=pi, absolute_views=views if views else None, tau=0.05)
-        ef = EfficientFrontier(bl.bl_returns(), bl.bl_cov(), weight_bounds=(0, 1) if not self.config.allow_short else (-1, 1))
-        ef.max_sharpe(risk_free_rate=self.config.risk_free_rate)
-
-        return StrategyResult(
-            _normalize_weights_dict(ef.clean_weights()),
-            "black_litterman",
-            "Black-Litterman",
-            {"views_used": views},
-        )
-
-    def tracking_error_optimal(self) -> StrategyResult:
-        assets = list(self.mu.index)
-        benchmark_proxy = self._benchmark_proxy_weights(assets)
-        x0 = benchmark_proxy.values.copy()
-        bounds = self._bounds()
-        cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-
-        b = self.benchmark_returns.values
-        r = self.returns[assets].values
-        mu = self.mu.values
-
-        def obj(w):
-            port = r @ w
-            te = np.std(port - b) * np.sqrt(_annualization_factor(self.config))
-            active_return = float(np.dot(w - benchmark_proxy.values, mu))
-            turnover = np.sum(np.abs(w - self.current_weights.values))
-            te_penalty = 0.0
-            if te > self.config.tracking_error_target:
-                te_penalty = 50.0 * (te - self.config.tracking_error_target) ** 2
-            return -active_return + te_penalty + self.config.turnover_penalty * turnover
-
-        res = minimize(obj, x0=x0, bounds=bounds, constraints=cons, method="SLSQP")
-        if not res.success:
-            raise RuntimeError(res.message)
-
-        realized_te = float(np.std((r @ res.x) - b) * np.sqrt(_annualization_factor(self.config)))
-        weights = self._normalize_result(res.x)
-        return StrategyResult(
-            weights,
-            "tracking_error_optimal",
-            "Tracking-error-constrained active portfolio",
-            {
-                "tracking_error_target": self.config.tracking_error_target,
-                "ex_ante_tracking_error": realized_te,
-            },
-        )
-
-    def _benchmark_proxy_weights(self, assets):
-        if self.config.benchmark in assets:
-            w = pd.Series(0.0, index=assets)
-            w[self.config.benchmark] = 1.0
-            return w
-        if "SPY" in assets:
-            w = pd.Series(0.0, index=assets)
-            w["SPY"] = 1.0
-            return w
-        return pd.Series(1 / len(assets), index=assets)
-
-    def _get_quasi_diag(self, link):
-        link = link.astype(int)
-        sort_ix = pd.Series([link[-1, 0], link[-1, 1]])
-        num_items = int(link[-1, 3])
-
-        while sort_ix.max() >= num_items:
-            sort_ix.index = range(0, sort_ix.shape[0] * 2, 2)
-            df0 = sort_ix[sort_ix >= num_items]
-            i = df0.index
-            j = df0.values - num_items
-            sort_ix.loc[i] = link[j, 0]
-            df1 = pd.Series(link[j, 1], index=i + 1)
-            sort_ix = pd.concat([sort_ix, df1]).sort_index()
-            sort_ix.index = range(sort_ix.shape[0])
-
-        return sort_ix.tolist()
-
-    def run_all(self) -> Dict[str, StrategyResult]:
-        start_time = time.time()
-
-        methods = {
-            "Max Sharpe": self.max_sharpe,
-            "Minimum Volatility": self.min_volatility,
-            "Equal Weight": self.equal_weight,
-            "Inverse Volatility": self.inverse_volatility,
-            "Equal Risk Contribution": self.equal_risk_contribution,
-            "Maximum Diversification": self.maximum_diversification,
-            "Hierarchical Risk Parity": self.hrp,
-            "Black-Litterman": self.black_litterman,
-            "Tracking Error Optimal": self.tracking_error_optimal,
-        }
-
-        out: Dict[str, StrategyResult] = {}
-        for name, fn in methods.items():
-            try:
-                r = self._attach_costs(fn())
-                self._validate(name, r)
-                out[name] = r
-                self.diagnostics.strategy_diagnostics[name] = r.diagnostics
-                logger.info(f"✅ {name}")
-            except Exception as exc:
-                logger.warning(f"⚠️ {name}: {exc}")
-
-        if not out:
-            raise ValueError("All strategies failed")
-
-        self.diagnostics.optimization_time = time.time() - start_time
-        return out
-
-
-# =========================================================
-# Analytics
-# =========================================================
-class AnalyticsEngine:
-    def __init__(self, config):
-        self.config = config
-
-    def portfolio_returns(self, returns, weights):
+    def _portfolio_returns(self, returns: pd.DataFrame, weights: Dict[str, float]) -> pd.Series:
         w = pd.Series(weights).reindex(returns.columns).fillna(0.0)
         w = w / w.sum()
         return returns.mul(w, axis=1).sum(axis=1)
 
-    def portfolio_values(self, returns, initial_capital):
-        return (1 + returns).cumprod() * initial_capital
+    def _build_strategies(self, mu: pd.Series, cov: pd.DataFrame) -> Dict[str, StrategyResult]:
+        assets = list(mu.index)
+        n = len(assets)
 
-    def calculate_var_family(self, portfolio_returns, benchmark_returns):
-        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
+        equal_weight = {a: 1.0 / n for a in assets}
+
+        inv_vol = 1 / np.maximum(np.sqrt(np.diag(cov.values)), 1e-12)
+        inv_vol = inv_vol / inv_vol.sum()
+        inverse_vol = {a: float(w) for a, w in zip(assets, inv_vol)}
+
+        def min_var():
+            x0 = np.repeat(1.0 / n, n)
+            bounds = [(0, 1)] * n if not self.config.allow_short else [(-1, 1)] * n
+            cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+
+            def obj(w):
+                return float(w @ cov.values @ w)
+
+            res = minimize(obj, x0, method="SLSQP", bounds=bounds, constraints=cons)
+            if not res.success:
+                return equal_weight
+            return _normalize_weights_dict({a: float(w) for a, w in zip(assets, res.x)})
+
+        def max_sharpe():
+            x0 = np.repeat(1.0 / n, n)
+            bounds = [(0, 1)] * n if not self.config.allow_short else [(-1, 1)] * n
+            cons = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+
+            def obj(w):
+                port_ret = float(np.dot(w, mu.values))
+                port_vol = float(np.sqrt(max(w @ cov.values @ w, 1e-12)))
+                return -((port_ret - self.config.risk_free_rate) / port_vol)
+
+            res = minimize(obj, x0, method="SLSQP", bounds=bounds, constraints=cons)
+            if not res.success:
+                return equal_weight
+            return _normalize_weights_dict({a: float(w) for a, w in zip(assets, res.x)})
+
+        strategies = {
+            "Max Sharpe": StrategyResult(max_sharpe(), "max_sharpe", "Sharpe-optimal portfolio"),
+            "Minimum Volatility": StrategyResult(min_var(), "min_volatility", "Minimum volatility portfolio"),
+            "Equal Weight": StrategyResult(equal_weight, "equal_weight", "Equal-weight benchmark"),
+            "Inverse Volatility": StrategyResult(inverse_vol, "inverse_volatility", "Inverse-volatility allocation"),
+        }
+
+        return strategies
+
+    def _calculate_metrics(self, pr: pd.Series, br: pd.Series) -> Dict[str, Any]:
+        ann = 252
+        aligned = pd.concat([pr, br], axis=1).dropna()
         aligned.columns = ["portfolio", "benchmark"]
-        active = aligned["portfolio"] - aligned["benchmark"]
 
-        out = {}
-        for cl in self.config.confidence_levels:
-            q_port = np.quantile(aligned["portfolio"], 1 - cl)
-            q_act = np.quantile(active, 1 - cl)
-            tail_port = aligned["portfolio"][aligned["portfolio"] <= q_port]
-            tail_act = active[active <= q_act]
+        if aligned.empty:
+            raise ValueError("Portfolio and benchmark series could not be aligned.")
 
-            out[f"var_{int(cl*100)}"] = float(-q_port)
-            out[f"cvar_{int(cl*100)}"] = float(-tail_port.mean()) if len(tail_port) else np.nan
-            out[f"relative_var_{int(cl*100)}"] = float(-q_act)
-            out[f"relative_cvar_{int(cl*100)}"] = float(-tail_act.mean()) if len(tail_act) else np.nan
+        portfolio_values = (1 + aligned["portfolio"]).cumprod() * self.config.initial_capital
+        benchmark_values = (1 + aligned["benchmark"]).cumprod() * self.config.initial_capital
 
-        return out
+        total_return_portfolio = portfolio_values.iloc[-1] / self.config.initial_capital - 1
+        total_return_benchmark = benchmark_values.iloc[-1] / self.config.initial_capital - 1
 
-    def historical_stress_tests(self, portfolio_returns, benchmark_returns):
+        n_years = len(aligned) / ann
+        annual_return_portfolio = (1 + total_return_portfolio) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+        annual_return_benchmark = (1 + total_return_benchmark) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+
+        volatility = float(aligned["portfolio"].std() * np.sqrt(ann))
+        sharpe = (annual_return_portfolio - self.config.risk_free_rate) / volatility if volatility > 0 else np.nan
+
+        downside = aligned["portfolio"][aligned["portfolio"] < 0]
+        downside_dev = float(downside.std() * np.sqrt(ann)) if len(downside) > 1 else np.nan
+        sortino = (annual_return_portfolio - self.config.risk_free_rate) / downside_dev if downside_dev and downside_dev > 0 else np.nan
+
+        drawdown = _drawdown_series(aligned["portfolio"])
+        max_drawdown = float(drawdown.min())
+        calmar = annual_return_portfolio / abs(max_drawdown) if max_drawdown < 0 else np.nan
+
+        covariance = aligned["portfolio"].cov(aligned["benchmark"])
+        benchmark_variance = aligned["benchmark"].var()
+        beta = float(covariance / benchmark_variance) if benchmark_variance > 0 else np.nan
+        alpha = float(annual_return_portfolio - (self.config.risk_free_rate + beta * (annual_return_benchmark - self.config.risk_free_rate))) if pd.notna(beta) else np.nan
+
+        tracking_diff = aligned["portfolio"] - aligned["benchmark"]
+        tracking_error = float(tracking_diff.std() * np.sqrt(ann))
+        information_ratio = float((tracking_diff.mean() * ann) / tracking_error) if tracking_error > 0 else np.nan
+
+        win_rate = float((aligned["portfolio"] > 0).mean())
+        win_rate_vs_benchmark = float((aligned["portfolio"] > aligned["benchmark"]).mean())
+        profit_factor = _profit_factor(aligned["portfolio"])
+
+        q95 = np.quantile(aligned["portfolio"], 0.05)
+        tail95 = aligned["portfolio"][aligned["portfolio"] <= q95]
+        aq95 = np.quantile(tracking_diff, 0.05)
+        atail95 = tracking_diff[tracking_diff <= aq95]
+
+        q99 = np.quantile(aligned["portfolio"], 0.01)
+        tail99 = aligned["portfolio"][aligned["portfolio"] <= q99]
+
+        return {
+            "final_portfolio_value": float(portfolio_values.iloc[-1]),
+            "final_benchmark_value": float(benchmark_values.iloc[-1]),
+            "total_return_pct": float(total_return_portfolio),
+            "total_return_benchmark_pct": float(total_return_benchmark),
+            "excess_return_vs_benchmark_pct": float(total_return_portfolio - total_return_benchmark),
+            "annual_return": float(annual_return_portfolio),
+            "annual_return_benchmark": float(annual_return_benchmark),
+            "volatility": float(volatility),
+            "sharpe_ratio": float(sharpe) if pd.notna(sharpe) else np.nan,
+            "sortino_ratio": float(sortino) if pd.notna(sortino) else np.nan,
+            "calmar_ratio": float(calmar) if pd.notna(calmar) else np.nan,
+            "max_drawdown": float(max_drawdown),
+            "alpha": alpha,
+            "beta": beta,
+            "tracking_error": float(tracking_error),
+            "information_ratio": information_ratio,
+            "win_rate": win_rate,
+            "win_rate_vs_benchmark": win_rate_vs_benchmark,
+            "profit_factor": profit_factor,
+            "portfolio_values": portfolio_values,
+            "benchmark_values": benchmark_values,
+            "drawdown_series": drawdown,
+            "portfolio_returns": aligned["portfolio"],
+            "benchmark_returns": aligned["benchmark"],
+            "var_95": float(-q95),
+            "cvar_95": float(-tail95.mean()) if len(tail95) else np.nan,
+            "relative_var_95": float(-aq95),
+            "relative_cvar_95": float(-atail95.mean()) if len(atail95) else np.nan,
+            "VaR_95": float(-q95),
+            "CVaR_95": float(-tail95.mean()) if len(tail95) else np.nan,
+            "VaR_99": float(-q99),
+            "CVaR_99": float(-tail99.mean()) if len(tail99) else np.nan,
+        }
+
+    def _historical_stress_tests(self, pr: pd.Series, br: pd.Series) -> pd.DataFrame:
         scenarios = {
             "COVID Crash": ("2020-02-19", "2020-03-23"),
             "2022 Inflation Shock": ("2022-01-03", "2022-10-14"),
@@ -766,15 +319,11 @@ class AnalyticsEngine:
         }
 
         rows = []
-        pr = portfolio_returns.copy()
-        br = benchmark_returns.copy()
-
         for name, (s, e) in scenarios.items():
             mask = (pr.index >= pd.Timestamp(s)) & (pr.index <= pd.Timestamp(e))
             p = pr.loc[mask]
             b = br.reindex(p.index).dropna()
             p = p.reindex(b.index)
-
             if len(p) < 5:
                 continue
 
@@ -789,128 +338,32 @@ class AnalyticsEngine:
                     "duration_days": len(p),
                 }
             )
-
         return pd.DataFrame(rows)
 
-    def calculate_all_metrics(self, portfolio_returns, benchmark_returns, initial_capital):
-        aligned = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
-        aligned.columns = ["portfolio", "benchmark"]
-
-        portfolio_values = self.portfolio_values(aligned["portfolio"], initial_capital)
-        benchmark_values = self.portfolio_values(aligned["benchmark"], initial_capital)
-
-        final_portfolio_value = float(portfolio_values.iloc[-1])
-        final_benchmark_value = float(benchmark_values.iloc[-1])
-
-        total_return_portfolio = final_portfolio_value / initial_capital - 1
-        total_return_benchmark = final_benchmark_value / initial_capital - 1
-
-        n_years = len(aligned) / _annualization_factor(self.config)
-        annual_return_portfolio = (1 + total_return_portfolio) ** (1 / n_years) - 1 if n_years > 0 else 0.0
-        annual_return_benchmark = (1 + total_return_benchmark) ** (1 / n_years) - 1 if n_years > 0 else 0.0
-
-        daily_rf = self.config.risk_free_rate / _annualization_factor(self.config)
-        excess_returns = aligned["portfolio"] - daily_rf
-        volatility = float(aligned["portfolio"].std() * np.sqrt(_annualization_factor(self.config)))
-        sharpe = float((excess_returns.mean() / aligned["portfolio"].std()) * np.sqrt(_annualization_factor(self.config))) if aligned["portfolio"].std() > 0 else 0.0
-
-        downside_returns = aligned["portfolio"][aligned["portfolio"] < 0]
-        downside_deviation = downside_returns.std() * np.sqrt(_annualization_factor(self.config)) if len(downside_returns) > 0 else volatility
-        sortino = (annual_return_portfolio - self.config.risk_free_rate) / downside_deviation if downside_deviation > 0 else 0.0
-
-        cumulative = (1 + aligned["portfolio"]).cumprod()
-        rolling_max = cumulative.cummax()
-        drawdown = cumulative / rolling_max - 1
-        max_drawdown = float(drawdown.min())
-        calmar = annual_return_portfolio / abs(max_drawdown) if max_drawdown < 0 else 0.0
-
-        covariance = aligned["portfolio"].cov(aligned["benchmark"])
-        benchmark_variance = aligned["benchmark"].var()
-        beta = float(covariance / benchmark_variance) if benchmark_variance > 0 else 1.0
-        alpha = float(annual_return_portfolio - (self.config.risk_free_rate + beta * (annual_return_benchmark - self.config.risk_free_rate)))
-
-        tracking_diff = aligned["portfolio"] - aligned["benchmark"]
-        tracking_error = float(tracking_diff.std() * np.sqrt(_annualization_factor(self.config)))
-        information_ratio = float((tracking_diff.mean() * _annualization_factor(self.config)) / tracking_error) if tracking_error > 0 else 0.0
-
-        winning_days = (aligned["portfolio"] > 0).sum()
-        losing_days = (aligned["portfolio"] < 0).sum()
-        win_rate = winning_days / (winning_days + losing_days) if (winning_days + losing_days) > 0 else 0
-
-        outperformance_days = (aligned["portfolio"] > aligned["benchmark"]).sum()
-        total_days = len(aligned)
-        win_rate_vs_benchmark = outperformance_days / total_days if total_days > 0 else 0
-
-        avg_win = aligned["portfolio"][aligned["portfolio"] > 0].mean() if winning_days > 0 else 0
-        avg_loss = aligned["portfolio"][aligned["portfolio"] < 0].mean() if losing_days > 0 else 0
-        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0
-
-        var_family = self.calculate_var_family(aligned["portfolio"], aligned["benchmark"])
-
-        return {
-            "initial_capital": initial_capital,
-            "final_portfolio_value": final_portfolio_value,
-            "final_benchmark_value": final_benchmark_value,
-            "total_profit_loss": final_portfolio_value - initial_capital,
-            "total_return_pct": total_return_portfolio,
-            "total_return_benchmark_pct": total_return_benchmark,
-            "excess_return_vs_benchmark_pct": total_return_portfolio - total_return_benchmark,
-            "annual_return": annual_return_portfolio,
-            "annual_return_benchmark": annual_return_benchmark,
-            "volatility": volatility,
-            "sharpe_ratio": sharpe,
-            "sortino_ratio": sortino,
-            "calmar_ratio": calmar,
-            "max_drawdown": max_drawdown,
-            "alpha": alpha,
-            "beta": beta,
-            "tracking_error": tracking_error,
-            "information_ratio": information_ratio,
-            "win_rate": win_rate,
-            "win_rate_vs_benchmark": win_rate_vs_benchmark,
-            "profit_factor": profit_factor,
-            "portfolio_values": portfolio_values,
-            "benchmark_values": benchmark_values,
-            "drawdown_series": drawdown,
-            "portfolio_returns": aligned["portfolio"],
-            "benchmark_returns": aligned["benchmark"],
-            **var_family,
-        }
-
-    def compute_risk_contributions(self, weights: Dict[str, float], cov: pd.DataFrame) -> pd.DataFrame:
+    def _compute_risk_contributions(self, weights: Dict[str, float], cov: pd.DataFrame) -> pd.DataFrame:
         assets = list(weights.keys())
         w = np.array([weights[a] for a in assets])
         S = cov.loc[assets, assets].values
         port_var = w @ S @ w
 
         if port_var <= 0:
-            return pd.DataFrame(
-                {
-                    "Asset": assets,
-                    "Weight": w,
-                    "Marginal Risk": 0.0,
-                    "Total Risk Contribution": 0.0,
-                    "Contribution %": 0.0,
-                }
-            )
+            return pd.DataFrame()
 
         port_vol = np.sqrt(port_var)
         marginal_risk = (S @ w) / port_vol
         total_contrib = w * marginal_risk
-        total_contrib = total_contrib / total_contrib.sum() * port_vol if total_contrib.sum() != 0 else total_contrib
 
-        df = pd.DataFrame(
+        return pd.DataFrame(
             {
                 "Asset": assets,
                 "Weight": w,
                 "Marginal Risk": marginal_risk,
                 "Total Risk Contribution": total_contrib,
-                "Contribution %": total_contrib / port_vol if port_vol > 0 else 0,
+                "Contribution %": total_contrib / port_vol,
             }
-        )
-        return df.sort_values("Total Risk Contribution", ascending=False)
+        ).sort_values("Total Risk Contribution", ascending=False)
 
-    def rolling_beta_table(self, returns_df: pd.DataFrame, benchmark_returns: pd.Series, window: int) -> pd.DataFrame:
+    def _rolling_beta(self, returns_df: pd.DataFrame, benchmark_returns: pd.Series, window: int) -> pd.DataFrame:
         aligned = pd.concat([returns_df, benchmark_returns.rename("benchmark")], axis=1).dropna()
         if aligned.empty:
             return pd.DataFrame()
@@ -922,11 +375,10 @@ class AnalyticsEngine:
                 continue
             cov = pair[col].rolling(window).cov(pair["benchmark"])
             varb = pair["benchmark"].rolling(window).var()
-            beta = cov / varb.replace(0, np.nan)
-            out[col] = beta
+            out[col] = cov / varb.replace(0, np.nan)
         return pd.DataFrame(out)
 
-    def rolling_beta_summary(self, rolling_beta_df: pd.DataFrame) -> pd.DataFrame:
+    def _rolling_beta_summary(self, rolling_beta_df: pd.DataFrame) -> pd.DataFrame:
         if rolling_beta_df.empty:
             return pd.DataFrame()
         return pd.DataFrame(
@@ -938,7 +390,7 @@ class AnalyticsEngine:
             }
         )
 
-    def factor_pca(self, returns_df: pd.DataFrame) -> pd.DataFrame:
+    def _factor_pca(self, returns_df: pd.DataFrame) -> pd.DataFrame:
         clean = returns_df.dropna(how="any")
         if clean.shape[1] < 2 or clean.shape[0] < 20:
             return pd.DataFrame()
@@ -962,422 +414,64 @@ class AnalyticsEngine:
 
         return pd.concat([loading_df, pd.DataFrame(explained_rows)], ignore_index=True)
 
+    def _build_charts(self, mu, cov):
+        vis = {}
+        if not self.metrics_df.empty:
+            vis["dashboard"] = px.bar(
+                self.metrics_df.reset_index(),
+                x=self.metrics_df.reset_index().columns[0],
+                y=[c for c in ["annual_return", "sharpe_ratio", "information_ratio"] if c in self.metrics_df.columns],
+                barmode="group",
+                title="Executive Strategy Dashboard",
+            ).update_layout(template="plotly_white", height=560)
 
-# =========================================================
-# Visuals
-# =========================================================
-class VisualizationEngine:
-    def __init__(self, config):
-        self.config = config
-
-    def info_hub_table(self, asset_metadata):
-        if asset_metadata.empty:
-            return go.Figure()
-        fig = go.Figure(
-            data=[
-                go.Table(
-                    header=dict(values=list(asset_metadata.columns), fill_color="#1a3a5c", font=dict(color="white", size=12), align="left"),
-                    cells=dict(values=[asset_metadata[c] for c in asset_metadata.columns], fill_color="white", align="left", font=dict(size=11)),
-                )
-            ]
-        )
-        fig.update_layout(title="Investment Universe Identity Map", height=max(420, 28 * len(asset_metadata) + 80))
-        return fig
-
-    def equity_curve_chart(self, portfolio_values, benchmark_values, strategy_name, initial_capital):
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=portfolio_values.index, y=portfolio_values.values, mode="lines", name=f"{strategy_name} Portfolio"))
-        fig.add_trace(go.Scatter(x=benchmark_values.index, y=benchmark_values.values, mode="lines", name=f"Benchmark ({self.config.benchmark})"))
-        fig.update_layout(title="Portfolio vs Benchmark Equity Curve", template="plotly_white", height=500)
-        return fig
-
-    def benchmark_vs_tracking_error_curve(self, strategy_returns, benchmark_returns, strategy_name):
-        aligned = pd.concat([strategy_returns, benchmark_returns], axis=1).dropna()
-        aligned.columns = ["portfolio", "benchmark"]
-        rolling_te = (aligned["portfolio"] - aligned["benchmark"]).rolling(63).std() * np.sqrt(_annualization_factor(self.config))
-        cum_port = (1 + aligned["portfolio"]).cumprod() - 1
-        cum_bench = (1 + aligned["benchmark"]).cumprod() - 1
-
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Scatter(x=cum_port.index, y=cum_port.values, mode="lines", name=f"{strategy_name} Cum Return"), secondary_y=False)
-        fig.add_trace(go.Scatter(x=cum_bench.index, y=cum_bench.values, mode="lines", name="Benchmark Cum Return"), secondary_y=False)
-        fig.add_trace(go.Scatter(x=rolling_te.index, y=rolling_te.values, mode="lines", name="Rolling Tracking Error (63D)"), secondary_y=True)
-        fig.update_layout(title="Benchmark vs Tracking-Error Optimal Dynamic Curve", template="plotly_white", height=500)
-        fig.update_yaxes(tickformat=".0%", secondary_y=False)
-        fig.update_yaxes(tickformat=".0%", secondary_y=True)
-        return fig
-
-    def drawdown_chart(self, drawdown_series, strategy_name):
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=drawdown_series.index, y=drawdown_series.values, mode="lines", fill="tozeroy", name=f"{strategy_name} Drawdown"))
-        fig.update_layout(title="Drawdown Analysis", template="plotly_white", height=450)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def allocation_chart(self, weights):
-        s = pd.Series(weights).sort_values(ascending=False)
-        fig = go.Figure([go.Bar(x=s.index[:15], y=s.values[:15], text=[f"{v:.1%}" for v in s.values[:15]], textposition="auto")])
-        fig.update_layout(title="Top Strategy Allocation", template="plotly_white", height=450)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def risk_contributions_chart(self, risk_df: pd.DataFrame):
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=risk_df["Asset"], y=risk_df["Contribution %"], text=[f"{v:.2%}" for v in risk_df["Contribution %"]], textposition="auto"))
-        fig.update_layout(title="Risk Contributions", template="plotly_white", height=500)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def performance_dashboard(self, metrics_df):
-        cols = [c for c in ["annual_return", "sharpe_ratio", "sortino_ratio", "max_drawdown", "information_ratio", "win_rate_vs_benchmark"] if c in metrics_df.columns]
-        fig = px.bar(metrics_df.reset_index(), x=metrics_df.reset_index().columns[0], y=cols, barmode="group", title="Executive Strategy Dashboard")
-        fig.update_layout(template="plotly_white", height=700)
-        return fig
-
-    def improved_radar_chart(self, metrics_df):
-        radar_metrics = [c for c in ["sharpe_ratio", "sortino_ratio", "information_ratio", "calmar_ratio", "win_rate_vs_benchmark", "annual_return"] if c in metrics_df.columns]
-        if not radar_metrics:
-            return go.Figure()
-        df_norm = metrics_df[radar_metrics].copy()
-        for col in radar_metrics:
-            minv = df_norm[col].min()
-            maxv = df_norm[col].max()
-            df_norm[col] = (df_norm[col] - minv) / (maxv - minv) if maxv > minv else 0.5
-
-        fig = go.Figure()
-        for idx, row in df_norm.head(8).iterrows():
-            fig.add_trace(go.Scatterpolar(r=row.values, theta=radar_metrics, fill="toself", name=idx))
-        fig.update_layout(title="Strategy Performance Radar (Normalized)", template="plotly_white", height=700)
-        return fig
-
-    def optimization_chart(self, mu, cov, strategies, risk_free_rate):
-        assets = list(mu.index)
-        rng = np.random.default_rng(42)
-        vols, rets = [], []
-
-        for _ in range(700):
-            w = rng.random(len(assets))
-            w /= w.sum()
-            vols.append(float(np.sqrt(w @ cov.values @ w)))
-            rets.append(float(np.dot(w, mu.values)))
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=vols, y=rets, mode="markers", name="Feasible Portfolios", opacity=0.25))
-
-        for name, result in strategies.items():
-            w = pd.Series(result.weights).reindex(assets).fillna(0.0).values
-            v = float(np.sqrt(w @ cov.values @ w))
-            r = float(np.dot(w, mu.values))
-            fig.add_trace(go.Scatter(x=[v], y=[r], mode="markers+text", text=[name], textposition="top center", name=name))
-
-        fig.update_layout(title="Portfolio Optimization & Efficient Frontier", template="plotly_white", height=580)
-        fig.update_xaxes(tickformat=".0%", title="Annual Volatility")
-        fig.update_yaxes(tickformat=".0%", title="Annual Return")
-        return fig
-
-    def tracking_error_chart(self, metrics_df):
-        if "tracking_error" not in metrics_df.columns:
-            return go.Figure()
-        fig = go.Figure([go.Bar(x=metrics_df.index, y=metrics_df["tracking_error"], text=[f"{v:.2%}" for v in metrics_df["tracking_error"]], textposition="auto")])
-        fig.update_layout(title="Tracking Error by Strategy", template="plotly_white", height=450)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def relative_frontier_chart(self, mu, cov, strategies, benchmark_proxy):
-        assets = list(mu.index)
-        b = benchmark_proxy.reindex(assets).fillna(0.0).values
-        rng = np.random.default_rng(42)
-        xs, ys = [], []
-
-        for _ in range(700):
-            w = rng.random(len(assets))
-            w /= w.sum()
-            active_vol = float(np.sqrt(max((w - b) @ cov.values @ (w - b), 0.0)))
-            excess_ret = float(np.dot(w - b, mu.values))
-            xs.append(active_vol)
-            ys.append(excess_ret)
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="markers", name="Feasible Relative Portfolios", opacity=0.25))
-
-        for name, result in strategies.items():
-            w = pd.Series(result.weights).reindex(assets).fillna(0.0).values
-            active_vol = float(np.sqrt(max((w - b) @ cov.values @ (w - b), 0.0)))
-            excess_ret = float(np.dot(w - b, mu.values))
-            fig.add_trace(go.Scatter(x=[active_vol], y=[excess_ret], mode="markers+text", text=[name], textposition="top center", name=name))
-
-        fig.update_layout(title="Benchmark-Relative Efficient Frontier", template="plotly_white", height=580)
-        fig.update_xaxes(tickformat=".0%", title="Tracking Error")
-        fig.update_yaxes(tickformat=".0%", title="Excess Return")
-        return fig
-
-    def stress_test_chart(self, stress_df):
-        if stress_df.empty:
-            return go.Figure()
-        xcol = "scenario" if "scenario" in stress_df.columns else "scenario_name"
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=stress_df[xcol], y=stress_df["portfolio_return"], name="Portfolio"))
-        fig.add_trace(go.Bar(x=stress_df[xcol], y=stress_df["benchmark_return"], name="Benchmark"))
-        fig.add_trace(go.Scatter(x=stress_df[xcol], y=stress_df["relative_return"], mode="lines+markers", name="Relative Return"))
-        fig.update_layout(title="Historical Stress Testing", barmode="group", template="plotly_white", height=500)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def var_family_chart(self, metrics_df, kind="absolute"):
-        if kind == "absolute":
-            cols = [c for c in ["var_95", "cvar_95"] if c in metrics_df.columns]
-            title = "VaR / CVaR Figures (Absolute)"
-        else:
-            cols = [c for c in ["relative_var_95", "relative_cvar_95"] if c in metrics_df.columns]
-            title = "Relative VaR / CVaR Figures (vs Benchmark)"
-
-        if len(cols) < 2:
-            return go.Figure()
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=metrics_df.index, y=metrics_df[cols[0]], name=cols[0]))
-        fig.add_trace(go.Bar(x=metrics_df.index, y=metrics_df[cols[1]], name=cols[1]))
-        fig.update_layout(title=title, template="plotly_white", height=500)
-        fig.update_yaxes(tickformat=".0%")
-        return fig
-
-    def rolling_beta_chart(self, rolling_beta_df: pd.DataFrame):
-        if rolling_beta_df.empty:
-            return go.Figure()
-        first_cols = rolling_beta_df.columns[: min(5, len(rolling_beta_df.columns))]
-        fig = go.Figure()
-        for col in first_cols:
-            fig.add_trace(go.Scatter(x=rolling_beta_df.index, y=rolling_beta_df[col], mode="lines", name=col))
-        fig.update_layout(title="Rolling Beta vs Benchmark", template="plotly_white", height=500)
-        return fig
-
-    def finquant_ef_chart(self, returns_df, mean_returns, cov_matrix, risk_free_rate, mc_trials=4000):
-        assets = mean_returns.index.tolist()
-        cov_matrix = cov_matrix.loc[assets, assets].astype(float)
-
-        rng = np.random.default_rng(42)
-        num_portfolios = int(min(max(mc_trials, 500), 6000))
-        results = np.zeros((3, num_portfolios), dtype=float)
-
-        for i in range(num_portfolios):
-            w = rng.random(len(assets))
-            w = w / np.sum(w)
-            port_return = float(np.dot(w, mean_returns.values))
-            port_vol = float(np.sqrt(max(w @ cov_matrix.values @ w, 0.0)))
-            sharpe = (port_return - risk_free_rate) / port_vol if port_vol > 0 else np.nan
-            results[0, i] = port_vol
-            results[1, i] = port_return
-            results[2, i] = sharpe if np.isfinite(sharpe) else np.nan
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=results[0],
-            y=results[1],
-            mode="markers",
-            name=f"Random Portfolios ({num_portfolios:,})",
-            marker=dict(size=4, color=results[2], colorscale="Viridis", showscale=True),
-        ))
-
-        asset_vols = np.sqrt(np.diag(cov_matrix.values))
-        fig.add_trace(go.Scatter(
-            x=asset_vols,
-            y=mean_returns.values,
-            mode="markers+text",
-            name="Individual Assets",
-            text=assets,
-            textposition="top center",
-        ))
-
-        fig.update_layout(
-            title="FinQuant Efficient Frontier & Monte Carlo",
-            xaxis_title="Annual Volatility (Risk)",
-            yaxis_title="Annual Return",
-            xaxis_tickformat=".0%",
-            yaxis_tickformat=".0%",
-            template="plotly_white",
-            height=650,
-        )
-        return fig
-
-    def finquant_weights_table(self, weights_dict: Dict[str, float], title: str):
-        df = pd.DataFrame(list(weights_dict.items()), columns=["Asset", "Weight"])
-        df = df.sort_values("Weight", ascending=False)
-        df["Weight %"] = df["Weight"].apply(lambda x: f"{x:.2%}")
-        fig = go.Figure(
-            data=[
-                go.Table(
-                    header=dict(values=["Asset", "Weight"], fill_color="#1a3a5c", font=dict(color="white", size=12), align="left"),
-                    cells=dict(values=[df["Asset"], df["Weight %"]], fill_color="white", align="left", font=dict(size=11)),
-                )
-            ]
-        )
-        fig.update_layout(title=title, height=420)
-        return fig
-
-
-# =========================================================
-# Main Engine
-# =========================================================
-class ProfessionalPortfolioEngine:
-    def __init__(self, config, bl_controls: Optional[Dict[str, Any]] = None, scenario_controls: Optional[Dict[str, Any]] = None):
-        self.config = config
-        self.bl_controls = bl_controls or {}
-        self.scenario_controls = scenario_controls or {}
-
-        self.diagnostics = RunDiagnostics()
-        self.data = ProfessionalDataManager(config, self.diagnostics)
-        self.analytics = AnalyticsEngine(config)
-        self.visual = VisualizationEngine(config)
-
-        self.mu = pd.Series(dtype=float)
-        self.cov = pd.DataFrame()
-        self.strategies: Dict[str, StrategyResult] = {}
-        self.metrics: Dict[str, Dict[str, Any]] = {}
-        self.metrics_df = pd.DataFrame()
-        self.strategy_df = pd.DataFrame()
-        self.stress_df = pd.DataFrame()
-        self.stress_table = pd.DataFrame()
-        self.risk_contrib_df = pd.DataFrame()
-        self.rolling_beta_df = pd.DataFrame()
-        self.beta_summary_df = pd.DataFrame()
-        self.factor_pca_df = pd.DataFrame()
-        self.charts: Dict[str, Any] = {}
-        self.finquant_charts: Dict[str, Any] = {}
-
-        # app compatibility
-        self.prices = pd.DataFrame()
-        self.returns = pd.DataFrame()
-
-    def best_strategy_name(self) -> str:
-        if self.metrics_df.empty:
-            raise ValueError("No strategy metrics are available.")
-        return str(self.metrics_df.index[0])
-
-    def _build_finquant_outputs(self) -> None:
-        if self.mu.empty or self.cov.empty or self.data.asset_returns.empty:
-            self.finquant_charts = {}
-            return
-
-        try:
-            ef_chart = self.visual.finquant_ef_chart(
-                self.data.asset_returns[self.mu.index],
-                self.mu,
-                self.cov,
-                self.config.risk_free_rate,
-                mc_trials=getattr(self.config, "finquant_mc_trials", 4000),
+            vis["tracking_error"] = (
+                px.bar(
+                    self.metrics_df.reset_index(),
+                    x=self.metrics_df.reset_index().columns[0],
+                    y="tracking_error",
+                    title="Tracking Error by Strategy",
+                ).update_layout(template="plotly_white", height=450)
+                if "tracking_error" in self.metrics_df.columns
+                else None
             )
 
-            min_vol_weights = {}
-            max_sharpe_weights = {}
-
-            if self.strategies:
-                if "Minimum Volatility" in self.strategies:
-                    min_vol_weights = self.strategies["Minimum Volatility"].weights
-                else:
-                    first = next(iter(self.strategies.values()))
-                    min_vol_weights = first.weights
-
-                if "Max Sharpe" in self.strategies:
-                    max_sharpe_weights = self.strategies["Max Sharpe"].weights
-                else:
-                    first = next(iter(self.strategies.values()))
-                    max_sharpe_weights = first.weights
-
-            self.finquant_charts = {
-                "ef_chart": ef_chart,
-                "min_vol_table": self.visual.finquant_weights_table(min_vol_weights, "Reference Minimum Volatility Weights") if min_vol_weights else None,
-                "max_sharpe_table": self.visual.finquant_weights_table(max_sharpe_weights, "Reference Max Sharpe Weights") if max_sharpe_weights else None,
-            }
-        except Exception as exc:
-            self.finquant_charts = {}
-            self.diagnostics.add_warning(f"FinQuant layer could not be built: {exc}")
-
-    def _build_chart_package(self) -> None:
-        if self.metrics_df.empty:
-            self.charts = {}
-            return
-
-        best_strategy = self.best_strategy_name()
-        best_metrics = self.metrics[best_strategy]
-        best_weights = self.strategies[best_strategy].weights
-
-        benchmark_proxy = pd.Series(0.0, index=self.mu.index)
-        if self.config.benchmark in benchmark_proxy.index:
-            benchmark_proxy[self.config.benchmark] = 1.0
-        elif "SPY" in benchmark_proxy.index:
-            benchmark_proxy["SPY"] = 1.0
-        else:
-            benchmark_proxy[:] = 1.0 / len(benchmark_proxy)
-
-        self.charts = {
-            "info_hub": self.visual.info_hub_table(self.data.asset_metadata),
-            "equity": self.visual.equity_curve_chart(
-                best_metrics["portfolio_values"],
-                best_metrics["benchmark_values"],
-                best_strategy,
-                self.config.initial_capital,
-            ),
-            "benchmark_vs_te": self.visual.benchmark_vs_tracking_error_curve(
-                best_metrics["portfolio_returns"],
-                best_metrics["benchmark_returns"],
-                best_strategy,
-            ),
-            "drawdown": self.visual.drawdown_chart(best_metrics["drawdown_series"], best_strategy),
-            "allocation": self.visual.allocation_chart(best_weights),
-            "risk_contrib": self.visual.risk_contributions_chart(self.risk_contrib_df) if not self.risk_contrib_df.empty else None,
-            "dashboard": self.visual.performance_dashboard(self.metrics_df),
-            "radar": self.visual.improved_radar_chart(self.metrics_df),
-            "optimization": self.visual.optimization_chart(
-                self.mu,
-                self.cov,
-                self.strategies,
-                self.config.risk_free_rate,
-            ),
-            "tracking_error": self.visual.tracking_error_chart(self.metrics_df),
-            "relative_frontier": self.visual.relative_frontier_chart(
-                self.mu,
-                self.cov,
-                self.strategies,
-                benchmark_proxy,
-            ),
-            "stress": self.visual.stress_test_chart(self.stress_df),
-            "absolute_var": self.visual.var_family_chart(self.metrics_df, kind="absolute"),
-            "relative_var": self.visual.var_family_chart(self.metrics_df, kind="relative"),
-            "rolling_beta": self.visual.rolling_beta_chart(self.rolling_beta_df),
-        }
+        self.charts = vis
+        self.finquant_charts = {}
 
     def run(self):
-        self.data.load()
-        self.prices = self.data.asset_prices.copy()
-        self.returns = self.data.asset_returns.copy()
+        tickers = self._resolve_universe()
 
-        builder = ModelInputBuilder(self.config, self.diagnostics)
-        self.mu = builder.build_expected_returns(self.data.asset_returns, self.data.benchmark_returns)
+        self.prices = self._download_prices(tickers)
+        self.returns = self.prices.pct_change().replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
-        common_assets = self.mu.index.intersection(self.data.asset_prices.columns).intersection(self.data.asset_returns.columns)
-        self.mu = self.mu.loc[common_assets]
-        self.cov = builder.build_covariance(self.data.asset_prices[common_assets])
+        if self.returns.shape[1] < 2:
+            raise ValueError("Not enough valid assets after returns calculation.")
 
-        optimizer = ProfessionalOptimizer(
-            self.mu,
-            self.cov,
-            self.data.asset_returns[common_assets],
-            self.data.benchmark_returns,
-            self.config,
-            self.diagnostics,
-        )
+        self.benchmark_returns = self._download_benchmark()
+        if self.benchmark_returns.empty:
+            self.benchmark_returns = self.returns.mean(axis=1)
+            self.diagnostics.add_warning("Benchmark fallback: using equal-weight proxy.")
 
-        self.strategies = optimizer.run_all()
-        logger.info(f"Optimized {len(self.strategies)} strategies")
+        common = self.returns.index.intersection(self.benchmark_returns.index)
+        self.returns = self.returns.loc[common]
+        self.prices = self.prices.loc[common]
+        self.benchmark_returns = self.benchmark_returns.loc[common]
 
-        for name, result in self.strategies.items():
-            pr = self.analytics.portfolio_returns(self.data.asset_returns[common_assets], result.weights)
-            self.metrics[name] = self.analytics.calculate_all_metrics(
-                pr,
-                self.data.benchmark_returns,
-                self.config.initial_capital,
+        if len(self.returns) < self.config.min_observations:
+            raise ValueError(
+                f"Return matrix has only {len(self.returns)} rows, below minimum observations {self.config.min_observations}."
             )
-            self.metrics[name]["weights"] = pd.Series(result.weights)
+
+        mu, cov = self._estimate_inputs()
+        strategies = self._build_strategies(mu, cov)
+
+        self.metrics = {}
+        for name, result in strategies.items():
+            pr = self._portfolio_returns(self.returns[mu.index], result.weights)
+            m = self._calculate_metrics(pr, self.benchmark_returns)
+            m["weights"] = pd.Series(result.weights)
+            self.metrics[name] = m
 
         self.metrics_df = pd.DataFrame(self.metrics).T.sort_values("sharpe_ratio", ascending=False)
 
@@ -1389,37 +483,37 @@ class ProfessionalPortfolioEngine:
                     "num_assets": len([w for w in result.weights.values() if w > 0.001]),
                     "max_weight": max(result.weights.values()),
                     "top_3_assets": ", ".join(
-                        [f"{asset}" for asset, weight in sorted(result.weights.items(), key=lambda x: x[1], reverse=True)[:3]]
+                        [asset for asset, weight in sorted(result.weights.items(), key=lambda x: x[1], reverse=True)[:3]]
                     ),
-                    "turnover": result.diagnostics.get("turnover", 0.0),
-                    "transaction_cost": result.diagnostics.get("estimated_transaction_cost_usd", 0.0),
-                    "tracking_error_target": result.diagnostics.get("tracking_error_target", np.nan),
-                    "ex_ante_tracking_error": result.diagnostics.get("ex_ante_tracking_error", np.nan),
                 }
-                for name, result in self.strategies.items()
+                for name, result in strategies.items()
             ]
         )
 
         best_strategy = self.best_strategy_name()
-        best_returns = self.metrics[best_strategy]["portfolio_returns"]
-        best_benchmark = self.metrics[best_strategy]["benchmark_returns"]
+        best_metrics = self.metrics[best_strategy]
 
-        self.stress_df = self.analytics.historical_stress_tests(best_returns, best_benchmark)
+        self.stress_df = self._historical_stress_tests(
+            best_metrics["portfolio_returns"],
+            best_metrics["benchmark_returns"],
+        )
         self.stress_table = self.stress_df.copy()
 
-        best_weights = self.strategies[best_strategy].weights
-        self.risk_contrib_df = self.analytics.compute_risk_contributions(best_weights, self.cov)
-
-        self.rolling_beta_df = self.analytics.rolling_beta_table(
-            self.data.asset_returns[self.mu.index],
-            self.data.benchmark_returns,
-            window=int(getattr(self.config, "rolling_window", 63)),
+        self.risk_contrib_df = self._compute_risk_contributions(
+            strategies[best_strategy].weights,
+            cov,
         )
-        self.beta_summary_df = self.analytics.rolling_beta_summary(self.rolling_beta_df)
-        self.factor_pca_df = self.analytics.factor_pca(self.data.asset_returns[self.mu.index])
 
-        self._build_chart_package()
-        self._build_finquant_outputs()
+        self.rolling_beta_df = self._rolling_beta(
+            self.returns[mu.index],
+            self.benchmark_returns,
+            int(self.config.rolling_window),
+        )
+        self.beta_summary_df = self._rolling_beta_summary(self.rolling_beta_df)
+        self.factor_pca_df = self._factor_pca(self.returns[mu.index])
 
-        self.diagnostics.add_info(f"Completed {len(self.stress_df)} stress tests")
+        self._build_charts(mu, cov)
+
+        self.diagnostics.add_info(f"Loaded {len(tickers)} requested tickers.")
+        self.diagnostics.add_info(f"Retained {self.returns.shape[1]} valid assets.")
         return self
