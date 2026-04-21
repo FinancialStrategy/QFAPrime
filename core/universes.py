@@ -2,31 +2,22 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-# -------------------------------------------------------------------
-# Final universe registry for QFA Prime
-# -------------------------------------------------------------------
-# Notes:
-# - Every universe must contain at least 2 assets.
-# - Keep universes compact to reduce Yahoo Finance throttling on Render.
-# - Use liquid Yahoo Finance tickers only.
-# -------------------------------------------------------------------
-
 UNIVERSE_REGISTRY: Dict[str, List[str]] = {
     "institutional_multi_asset": [
-        "SPY",      # US Equities
-        "QQQ",      # Nasdaq
-        "GLD",      # Gold
-        "TLT",      # Long US Treasuries
-        "IEF",      # Intermediate US Treasuries
-        "DBC",      # Broad Commodities
-        "VNQ",      # REITs
+        "SPY",
+        "QQQ",
+        "GLD",
+        "TLT",
+        "IEF",
+        "DBC",
+        "VNQ",
     ],
     "global_equities": [
-        "SPY",      # US
-        "VEA",      # Developed ex-US
-        "VWO",      # Emerging Markets
-        "EWJ",      # Japan
-        "EWU",      # UK
+        "SPY",
+        "VEA",
+        "VWO",
+        "EWJ",
+        "EWU",
     ],
     "defensive_allocation": [
         "TLT",
