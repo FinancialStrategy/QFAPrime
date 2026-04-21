@@ -1,5 +1,3 @@
-from typing import Dict, List, Optional
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -9,6 +7,10 @@ from core.config import ProfessionalConfig
 from core.engine import ProfessionalPortfolioEngine
 from core.universes import UNIVERSE_REGISTRY
 
+
+# =========================================================
+# Page config
+# =========================================================
 st.set_page_config(
     page_title="QFA Prime Finance Platform",
     page_icon="📈",
@@ -16,10 +18,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# =========================================================
+# Styling
+# =========================================================
 CUSTOM_CSS = """
 <style>
 .block-container {
-    padding-top: 1.2rem;
+    padding-top: 1.15rem;
     padding-bottom: 2rem;
     max-width: 1600px;
 }
@@ -55,7 +61,7 @@ CUSTOM_CSS = """
 }
 .qfa-card-value {
     color: #0f172a;
-    font-size: 1.5rem;
+    font-size: 1.45rem;
     font-weight: 800;
     margin-bottom: 0.25rem;
 }
@@ -68,19 +74,22 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-def fmt_pct(x: Optional[float]) -> str:
+# =========================================================
+# Helpers
+# =========================================================
+def fmt_pct(x):
     if x is None or pd.isna(x):
         return "N/A"
     return f"{x:.2%}"
 
 
-def fmt_num(x: Optional[float], decimals: int = 2) -> str:
+def fmt_num(x, decimals=2):
     if x is None or pd.isna(x):
         return "N/A"
     return f"{x:,.{decimals}f}"
 
 
-def fmt_usd(x: Optional[float]) -> str:
+def fmt_usd(x):
     if x is None or pd.isna(x):
         return "N/A"
     return f"${x:,.0f}"
@@ -98,6 +107,13 @@ def safe_df(obj) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def cumulative_curve(returns: pd.Series) -> pd.Series:
+    s = safe_series(returns)
+    if s.empty:
+        return s
+    return (1.0 + s).cumprod() - 1.0
+
+
 def render_kpi_card(title: str, value: str, sub: str = "") -> None:
     st.markdown(
         f"""
@@ -111,19 +127,7 @@ def render_kpi_card(title: str, value: str, sub: str = "") -> None:
     )
 
 
-def cumulative_curve(returns: pd.Series) -> pd.Series:
-    s = safe_series(returns)
-    if s.empty:
-        return s
-    return (1 + s).cumprod() - 1
-
-
-def make_line_chart(
-    df: pd.DataFrame,
-    title: str,
-    yaxis_title: str = "",
-    height: int = 500,
-) -> go.Figure:
+def make_line_chart(df: pd.DataFrame, title: str, yaxis_title: str = "", height: int = 500) -> go.Figure:
     fig = go.Figure()
     for col in df.columns:
         fig.add_trace(
@@ -137,8 +141,8 @@ def make_line_chart(
 
     fig.update_layout(
         title=title,
-        height=height,
         template="plotly_white",
+        height=height,
         margin=dict(l=20, r=20, t=60, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
         xaxis_title="Date",
@@ -147,22 +151,14 @@ def make_line_chart(
     return fig
 
 
-def make_bar_chart(
-    df: pd.DataFrame,
-    x: str,
-    y: str,
-    title: str,
-    color: Optional[str] = None,
-    height: int = 500,
-) -> go.Figure:
+def make_bar_chart(df: pd.DataFrame, x: str, y: str, title: str, color: str | None = None, height: int = 500) -> go.Figure:
     fig = px.bar(df, x=x, y=y, color=color, title=title)
     fig.update_layout(
-        height=height,
         template="plotly_white",
+        height=height,
         margin=dict(l=20, r=20, t=60, b=20),
         xaxis_title=x,
         yaxis_title=y,
-        showlegend=bool(color),
     )
     return fig
 
@@ -189,32 +185,12 @@ def build_strategy_drawdown_frame(engine: ProfessionalPortfolioEngine) -> pd.Dat
     return pd.DataFrame(dds)
 
 
-def metric_columns_for_display() -> List[str]:
-    return [
-        "annual_return",
-        "annual_return_benchmark",
-        "volatility",
-        "sharpe_ratio",
-        "sortino_ratio",
-        "calmar_ratio",
-        "max_drawdown",
-        "alpha",
-        "beta",
-        "tracking_error",
-        "information_ratio",
-        "win_rate",
-        "profit_factor",
-        "total_return_pct",
-        "total_return_benchmark_pct",
-        "excess_return_vs_benchmark_pct",
-    ]
-
-
 def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
     out = df.copy()
+
     pct_cols = [
         "annual_return",
         "annual_return_benchmark",
@@ -226,7 +202,12 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         "total_return_benchmark_pct",
         "excess_return_vs_benchmark_pct",
         "alpha",
+        "VaR_95",
+        "CVaR_95",
+        "VaR_99",
+        "CVaR_99",
     ]
+
     num_cols = [
         "sharpe_ratio",
         "sortino_ratio",
@@ -234,19 +215,27 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         "beta",
         "information_ratio",
         "profit_factor",
+        "final_portfolio_value",
     ]
 
     for c in pct_cols:
         if c in out.columns:
             out[c] = out[c].map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
+
     for c in num_cols:
         if c in out.columns:
-            out[c] = out[c].map(lambda x: f"{x:,.3f}" if pd.notna(x) else "N/A")
+            if c == "final_portfolio_value":
+                out[c] = out[c].map(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+            else:
+                out[c] = out[c].map(lambda x: f"{x:,.3f}" if pd.notna(x) else "N/A")
 
     return out
 
 
 def prepare_stress_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
     show_df = df.copy()
     for col in ["portfolio_return", "benchmark_return", "relative_return", "severity_score"]:
         if col in show_df.columns:
@@ -254,7 +243,7 @@ def prepare_stress_display_table(df: pd.DataFrame) -> pd.DataFrame:
     return show_df
 
 
-def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
+def prepare_tail_metrics(best_metrics: dict) -> pd.DataFrame:
     rows = []
     for key, val in best_metrics.items():
         key_str = str(key).lower()
@@ -269,6 +258,9 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
     return out
 
 
+# =========================================================
+# Sidebar
+# =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
 
@@ -294,6 +286,7 @@ with st.sidebar:
         value=100000.0,
         step=1000.0,
     )
+
     risk_free_rate = st.number_input(
         "Risk-Free Rate",
         min_value=0.0,
@@ -302,33 +295,39 @@ with st.sidebar:
         step=0.005,
         format="%.3f",
     )
+
     min_observations = st.number_input(
         "Minimum Observations",
         min_value=20,
         value=60,
         step=5,
     )
+
     rolling_window = st.number_input(
         "Rolling Window",
         min_value=20,
         value=63,
         step=1,
     )
+
     use_log_returns = st.checkbox("Use Log Returns", value=False)
     allow_short = st.checkbox("Allow Short Selling", value=False)
 
     st.markdown("---")
     st.markdown("### Expected Return / Risk Settings")
+
     expected_return_method = st.selectbox(
         "Expected Return Method",
         options=["historical_mean"],
         index=0,
     )
+
     covariance_method = st.selectbox(
         "Covariance Method",
         options=["sample_cov"],
         index=0,
     )
+
     correlation_method = st.selectbox(
         "Correlation Method",
         options=["pearson"],
@@ -337,15 +336,18 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Black-Litterman")
+
     bl_enabled = st.checkbox("Enable Black-Litterman Proxy", value=False)
 
     st.markdown("---")
     st.markdown("### Stress Filters")
+
     selected_family = st.selectbox(
         "Scenario Family",
         options=["All", "Crisis", "Inflation", "Banking_Stress", "Sharp_Rally", "Sharp_Selloff"],
         index=0,
     )
+
     minimum_severity_threshold = st.slider(
         "Minimum Severity Threshold",
         min_value=0.0,
@@ -353,6 +355,7 @@ with st.sidebar:
         value=0.0,
         step=0.01,
     )
+
     quick_view = st.selectbox(
         "Quick View",
         options=[
@@ -367,10 +370,21 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.caption("Yahoo Finance on free cloud instances can throttle requests. If that happens, retry with fewer assets.")
-    run_button = st.button("Run Professional Analytics", type="primary", use_container_width=True)
+    st.caption(
+        "Yahoo Finance on free cloud instances can throttle requests. "
+        "If that happens, wait briefly and rerun with a smaller universe."
+    )
+
+    run_button = st.button(
+        "Run Professional Analytics",
+        type="primary",
+        use_container_width=True,
+    )
 
 
+# =========================================================
+# Header
+# =========================================================
 st.markdown(
     """
     <div class="qfa-hero">
@@ -381,12 +395,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# =========================================================
+# Session state
+# =========================================================
 if "engine_result" not in st.session_state:
     st.session_state.engine_result = None
+
 if "engine_error" not in st.session_state:
     st.session_state.engine_error = None
+
 if "last_run_params" not in st.session_state:
     st.session_state.last_run_params = None
+
 
 current_params = {
     "benchmark_symbol": benchmark_symbol,
@@ -410,12 +431,20 @@ current_params = {
 if run_button:
     st.session_state.last_run_params = current_params.copy()
 
+
+# =========================================================
+# Initial state
+# =========================================================
 if st.session_state.last_run_params is None:
     st.info("Choose your settings in the sidebar, then click **Run Professional Analytics**.")
     st.stop()
 
 run_params = st.session_state.last_run_params
 
+
+# =========================================================
+# Run engine
+# =========================================================
 with st.spinner("Downloading data and running portfolio analytics..."):
     try:
         config = ProfessionalConfig(
@@ -446,6 +475,7 @@ with st.spinner("Downloading data and running portfolio analytics..."):
                 "quick_view": run_params["quick_view"],
             },
         )
+
         engine.run()
         st.session_state.engine_result = engine
         st.session_state.engine_error = None
@@ -454,23 +484,42 @@ with st.spinner("Downloading data and running portfolio analytics..."):
         st.session_state.engine_result = None
         st.session_state.engine_error = str(exc)
 
-engine: Optional[ProfessionalPortfolioEngine] = st.session_state.engine_result
+
+engine = st.session_state.engine_result
 engine_error = st.session_state.engine_error
 
+
+# =========================================================
+# Error handling
+# =========================================================
 if engine_error:
     st.error(f"Application error: {engine_error}")
-    if "rate limit" in engine_error.lower() or "too many requests" in engine_error.lower():
+
+    lowered = engine_error.lower()
+    if "rate limit" in lowered or "too many requests" in lowered:
         st.warning(
             "Yahoo Finance appears to be throttling requests. "
             "Wait 30-60 seconds and rerun, preferably with a smaller universe."
         )
+
+    if "does not contain enough assets" in lowered:
+        st.warning(
+            "The selected universe is invalid. Please verify that the selected universe "
+            "contains at least two tickers in core/universes.py."
+        )
+
     st.stop()
 
 if engine is None:
     st.warning("No analysis output is available.")
     st.stop()
 
+
+# =========================================================
+# Diagnostics
+# =========================================================
 diag = engine.diagnostics.summary()
+
 if diag.get("warnings"):
     with st.expander("Diagnostics Warnings", expanded=False):
         for warning_msg in diag["warnings"]:
@@ -481,25 +530,43 @@ if diag.get("errors"):
         for error_msg in diag["errors"]:
             st.error(str(error_msg))
 
+
+# =========================================================
+# Best strategy / KPIs
+# =========================================================
 best_name = engine.best_strategy_name()
 best_metrics = engine.metrics.get(best_name, {})
 
 k1, k2, k3, k4, k5, k6 = st.columns(6)
+
 with k1:
     render_kpi_card("Best Strategy", best_name, "Top rank by Sharpe ratio")
+
 with k2:
     render_kpi_card("Annual Return", fmt_pct(best_metrics.get("annual_return")), "Annualized")
+
 with k3:
     render_kpi_card("Volatility", fmt_pct(best_metrics.get("volatility")), "Annualized")
+
 with k4:
     render_kpi_card("Sharpe Ratio", fmt_num(best_metrics.get("sharpe_ratio"), 3), "Risk-adjusted")
+
 with k5:
     render_kpi_card("Max Drawdown", fmt_pct(best_metrics.get("max_drawdown")), "Peak-to-trough")
+
 with k6:
-    render_kpi_card("Final Portfolio Value", fmt_usd(best_metrics.get("final_portfolio_value")), "Based on initial capital")
+    render_kpi_card(
+        "Final Portfolio Value",
+        fmt_usd(best_metrics.get("final_portfolio_value")),
+        "Based on initial capital",
+    )
 
 st.markdown("")
 
+
+# =========================================================
+# Tabs
+# =========================================================
 tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.tabs(
     [
         "Overview",
@@ -511,6 +578,10 @@ tab_overview, tab_strategies, tab_risk, tab_stress, tab_factors, tab_data = st.t
     ]
 )
 
+
+# =========================================================
+# Overview
+# =========================================================
 with tab_overview:
     st.subheader("Executive Summary")
 
@@ -573,13 +644,16 @@ with tab_overview:
         hide_index=True,
     )
 
+
+# =========================================================
+# Strategy comparison
+# =========================================================
 with tab_strategies:
     st.subheader("Strategy Comparison Table")
 
     metrics_df = safe_df(engine.metrics_df)
     if not metrics_df.empty:
-        display_cols = [c for c in metric_columns_for_display() if c in metrics_df.columns]
-        display_df = format_metrics_df(metrics_df[display_cols].copy())
+        display_df = format_metrics_df(metrics_df.copy())
         st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No strategy metrics are available.")
@@ -604,10 +678,15 @@ with tab_strategies:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    if hasattr(engine, "strategy_df") and not engine.strategy_df.empty:
+    strategy_df = safe_df(engine.strategy_df)
+    if not strategy_df.empty:
         st.subheader("Strategy Diagnostics")
-        st.dataframe(engine.strategy_df, use_container_width=True)
+        st.dataframe(strategy_df, use_container_width=True)
 
+
+# =========================================================
+# Risk analytics
+# =========================================================
 with tab_risk:
     st.subheader("Risk Dashboard")
 
@@ -617,6 +696,26 @@ with tab_risk:
     else:
         st.info("Tail metrics are not available for the best strategy.")
 
+    weights = best_metrics.get("weights")
+    if isinstance(weights, pd.Series) and not weights.empty:
+        weights_df = (
+            weights.sort_values(ascending=False)
+            .reset_index()
+            .rename(columns={"index": "Asset", 0: "Weight"})
+        )
+        fig = make_bar_chart(
+            weights_df,
+            x="Asset",
+            y="Weight",
+            title=f"Portfolio Weights - {best_name}",
+            height=500,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+# =========================================================
+# Stress testing
+# =========================================================
 with tab_stress:
     st.subheader("Stress Testing")
 
@@ -626,9 +725,25 @@ with tab_stress:
 
     if not stress_df.empty:
         st.dataframe(prepare_stress_display_table(stress_df), use_container_width=True)
+
+        if "scenario_name" in stress_df.columns and "relative_return" in stress_df.columns:
+            stress_plot_df = stress_df.copy()
+            fig = make_bar_chart(
+                stress_plot_df,
+                x="scenario_name",
+                y="relative_return",
+                title="Scenario Relative Return Impact",
+                color="family" if "family" in stress_plot_df.columns else None,
+                height=500,
+            )
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Stress testing output is not available.")
 
+
+# =========================================================
+# Factor PCA
+# =========================================================
 with tab_factors:
     st.subheader("Factor PCA")
 
@@ -638,10 +753,15 @@ with tab_factors:
     else:
         st.info("Factor PCA output is not available.")
 
+
+# =========================================================
+# Data & diagnostics
+# =========================================================
 with tab_data:
     st.subheader("Data & Diagnostics")
 
     st.write("Selected universe:", run_params["selected_universe"])
+    st.write("Universe tickers:", UNIVERSE_REGISTRY.get(run_params["selected_universe"], []))
     st.write("Benchmark:", run_params["benchmark_symbol"])
     st.write("Start date:", run_params["default_start_date"])
 
