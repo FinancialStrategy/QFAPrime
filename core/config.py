@@ -23,9 +23,10 @@ class ProfessionalConfig:
 
     risk_free_rate: float = 0.03
 
+    # More diversification-friendly caps
     min_weight: float = 0.00
-    max_weight: float = 0.20
-    max_category_weight: float = 0.35
+    max_weight: float = 0.12
+    max_category_weight: float = 0.40
     allow_short: bool = False
 
     covariance_method: str = "ledoit_wolf"
