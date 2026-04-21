@@ -12,6 +12,9 @@ from core.engine import ProfessionalPortfolioEngine
 from core.universes import UNIVERSE_REGISTRY
 
 
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
     page_title="QFA Prime Finance Platform",
     page_icon="📈",
@@ -19,6 +22,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+# =========================================================
+# STYLING
+# =========================================================
 CUSTOM_CSS = """
 <style>
 .block-container {
@@ -76,6 +83,9 @@ CUSTOM_CSS = """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
+# =========================================================
+# HELPERS
+# =========================================================
 def fmt_pct(x):
     if x is None or pd.isna(x):
         return "N/A"
@@ -171,6 +181,7 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     out = df.copy()
+
     pct_cols = [
         "annual_return", "annual_return_benchmark", "volatility", "max_drawdown",
         "tracking_error", "win_rate", "win_rate_vs_benchmark",
@@ -179,6 +190,7 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
         "var_95", "cvar_95", "relative_var_95", "relative_cvar_95",
         "portfolio_return", "benchmark_return", "relative_return", "severity_score"
     ]
+
     num_cols = [
         "sharpe_ratio", "sortino_ratio", "calmar_ratio", "beta",
         "information_ratio", "profit_factor", "final_portfolio_value"
@@ -186,7 +198,9 @@ def format_metrics_df(df: pd.DataFrame) -> pd.DataFrame:
 
     for c in pct_cols:
         if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce").map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
+            out[c] = pd.to_numeric(out[c], errors="coerce").map(
+                lambda x: f"{x:.2%}" if pd.notna(x) else "N/A"
+            )
 
     for c in num_cols:
         if c in out.columns:
@@ -203,7 +217,9 @@ def prepare_stress_display_table(df: pd.DataFrame) -> pd.DataFrame:
     show_df = df.copy()
     for col in ["portfolio_return", "benchmark_return", "relative_return", "severity_score"]:
         if col in show_df.columns:
-            show_df[col] = pd.to_numeric(show_df[col], errors="coerce").map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
+            show_df[col] = pd.to_numeric(show_df[col], errors="coerce").map(
+                lambda x: f"{x:.2%}" if pd.notna(x) else "N/A"
+            )
     return show_df
 
 
@@ -213,16 +229,15 @@ def prepare_tail_metrics(best_metrics: Dict) -> pd.DataFrame:
         key_str = str(key).lower()
         if "var" in key_str or "cvar" in key_str:
             rows.append({"Metric": key, "Value": val})
+
     if not rows:
         return pd.DataFrame()
+
     out = pd.DataFrame(rows)
-    out["Value"] = pd.to_numeric(out["Value"], errors="coerce").map(lambda x: f"{x:.2%}" if pd.notna(x) else "N/A")
+    out["Value"] = pd.to_numeric(out["Value"], errors="coerce").map(
+        lambda x: f"{x:.2%}" if pd.notna(x) else "N/A"
+    )
     return out
-
-
-def show_plotly(fig):
-    if fig is not None:
-        st.plotly_chart(fig, use_container_width=True)
 
 
 def get_chart_dict(engine: Any) -> Dict[str, Any]:
@@ -235,12 +250,20 @@ def get_finquant_chart_dict(engine: Any) -> Dict[str, Any]:
     return charts if isinstance(charts, dict) else {}
 
 
+def show_plotly(fig):
+    if fig is not None:
+        st.plotly_chart(fig, use_container_width=True)
+
+
 def call_constructor_flex(cls, payload: Dict[str, Any]):
     sig = inspect.signature(cls)
     valid = {k: v for k, v in payload.items() if k in sig.parameters}
     return cls(**valid)
 
 
+# =========================================================
+# HEADER
+# =========================================================
 st.markdown(
     """
     <div class="qfa-hero">
@@ -252,125 +275,202 @@ st.markdown(
 )
 
 
+# =========================================================
+# SESSION STATE
+# =========================================================
+if "engine_result" not in st.session_state:
+    st.session_state.engine_result = None
+
+if "engine_error" not in st.session_state:
+    st.session_state.engine_error = None
+
+if "run_params" not in st.session_state:
+    st.session_state.run_params = None
+
+if "run_counter" not in st.session_state:
+    st.session_state.run_counter = 0
+
+
+# =========================================================
+# SIDEBAR - PENDING INPUTS ONLY
+# =========================================================
 with st.sidebar:
     st.markdown("## Portfolio Gate")
 
     available_universes = list(UNIVERSE_REGISTRY.keys())
-    default_universe = "institutional_multi_asset" if "institutional_multi_asset" in available_universes else available_universes[0]
+    default_universe = (
+        "institutional_multi_asset"
+        if "institutional_multi_asset" in available_universes
+        else available_universes[0]
+    )
 
-    selected_universe = st.selectbox(
+    pending_selected_universe = st.selectbox(
         "Investment Universe",
         options=available_universes,
         index=available_universes.index(default_universe),
+        key="pending_selected_universe",
     )
 
+    selected_tickers = UNIVERSE_REGISTRY.get(pending_selected_universe, [])
+
     st.caption("Universe composition")
-    st.code(", ".join(UNIVERSE_REGISTRY.get(selected_universe, [])), language=None)
+    st.code(", ".join(selected_tickers), language=None)
+    st.caption(f"Number of instruments: {len(selected_tickers)}")
 
-    benchmark_symbol = st.text_input("Benchmark Symbol", value="^GSPC")
-    default_start_date = st.text_input("Start Date", value="2019-01-01")
+    pending_benchmark_symbol = st.text_input("Benchmark Symbol", value="^GSPC", key="pending_benchmark_symbol")
+    pending_default_start_date = st.text_input("Start Date", value="2019-01-01", key="pending_default_start_date")
 
-    initial_capital = st.number_input("Initial Capital", min_value=1000.0, value=100000.0, step=1000.0)
-    risk_free_rate = st.number_input("Risk-Free Rate", min_value=0.0, max_value=1.0, value=0.03, step=0.005, format="%.3f")
-    min_observations = st.number_input("Minimum Observations", min_value=20, value=60, step=5)
-    rolling_window = st.number_input("Rolling Window", min_value=20, value=63, step=1)
+    pending_initial_capital = st.number_input(
+        "Initial Capital",
+        min_value=1000.0,
+        value=100000.0,
+        step=1000.0,
+        key="pending_initial_capital",
+    )
 
-    use_log_returns = st.checkbox("Use Log Returns", value=False)
-    allow_short = st.checkbox("Allow Short Selling", value=False)
+    pending_risk_free_rate = st.number_input(
+        "Risk-Free Rate",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.03,
+        step=0.005,
+        format="%.3f",
+        key="pending_risk_free_rate",
+    )
+
+    pending_min_observations = st.number_input(
+        "Minimum Observations",
+        min_value=20,
+        value=60,
+        step=5,
+        key="pending_min_observations",
+    )
+
+    pending_rolling_window = st.number_input(
+        "Rolling Window",
+        min_value=20,
+        value=63,
+        step=1,
+        key="pending_rolling_window",
+    )
+
+    pending_use_log_returns = st.checkbox("Use Log Returns", value=False, key="pending_use_log_returns")
+    pending_allow_short = st.checkbox("Allow Short Selling", value=False, key="pending_allow_short")
 
     st.markdown("---")
     st.markdown("### Model Settings")
 
-    expected_return_method = st.selectbox(
+    pending_expected_return_method = st.selectbox(
         "Expected Return Method",
         options=["historical_mean", "ema_historical", "capm"],
         index=0,
+        key="pending_expected_return_method",
     )
 
-    covariance_method = st.selectbox(
+    pending_covariance_method = st.selectbox(
         "Covariance Method",
         options=["sample_cov", "sample", "shrinkage", "ledoit_wolf"],
         index=0,
+        key="pending_covariance_method",
     )
 
-    correlation_method = st.selectbox(
+    pending_correlation_method = st.selectbox(
         "Correlation Method",
         options=["pearson"],
         index=0,
+        key="pending_correlation_method",
     )
 
     st.markdown("---")
     st.markdown("### Black-Litterman")
-    bl_enabled = st.checkbox("Enable Black-Litterman Proxy", value=False)
+    pending_bl_enabled = st.checkbox("Enable Black-Litterman Proxy", value=False, key="pending_bl_enabled")
 
     st.markdown("---")
     st.markdown("### Stress Filters")
-    selected_family = st.selectbox(
+
+    pending_selected_family = st.selectbox(
         "Scenario Family",
         options=["All", "Crisis", "Inflation", "Banking_Stress", "Sharp_Rally", "Sharp_Selloff"],
         index=0,
+        key="pending_selected_family",
     )
-    minimum_severity_threshold = st.slider("Minimum Severity Threshold", min_value=0.0, max_value=1.0, value=0.0, step=0.01)
-    quick_view = st.selectbox(
+
+    pending_minimum_severity_threshold = st.slider(
+        "Minimum Severity Threshold",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.0,
+        step=0.01,
+        key="pending_minimum_severity_threshold",
+    )
+
+    pending_quick_view = st.selectbox(
         "Quick View",
         options=[
-            "All", "Crisis Only", "Inflation Only",
-            "Banking Stress Only", "Sharp Rally Only", "Sharp Selloff Only",
+            "All",
+            "Crisis Only",
+            "Inflation Only",
+            "Banking Stress Only",
+            "Sharp Rally Only",
+            "Sharp Selloff Only",
         ],
         index=0,
+        key="pending_quick_view",
     )
 
     st.markdown("---")
     st.caption(
-        "Yahoo Finance on cloud instances can throttle requests. "
-        "Use smaller universes and rerun after a short pause if needed."
+        "Sidebar changes update pending settings only. Analytics will run only when you click the button below."
     )
 
-    run_button = st.button("Run Professional Analytics", type="primary", use_container_width=True)
+    run_button = st.button(
+        "Run Professional Analytics",
+        type="primary",
+        use_container_width=True,
+    )
 
 
-if "engine_result" not in st.session_state:
-    st.session_state.engine_result = None
-if "engine_error" not in st.session_state:
-    st.session_state.engine_error = None
-if "last_run_params" not in st.session_state:
-    st.session_state.last_run_params = None
-if "has_run" not in st.session_state:
-    st.session_state.has_run = False
-
-
-current_params = {
-    "benchmark_symbol": benchmark_symbol,
-    "default_start_date": default_start_date,
-    "initial_capital": float(initial_capital),
-    "risk_free_rate": float(risk_free_rate),
-    "min_observations": int(min_observations),
-    "rolling_window": int(rolling_window),
-    "use_log_returns": bool(use_log_returns),
-    "allow_short": bool(allow_short),
-    "selected_universe": selected_universe,
-    "expected_return_method": expected_return_method,
-    "covariance_method": covariance_method,
-    "correlation_method": correlation_method,
-    "bl_enabled": bool(bl_enabled),
-    "selected_family": selected_family,
-    "minimum_severity_threshold": float(minimum_severity_threshold),
-    "quick_view": quick_view,
-}
-
+# =========================================================
+# BUILD EXECUTED PARAMS ONLY WHEN BUTTON CLICKED
+# =========================================================
 if run_button:
-    st.session_state.last_run_params = current_params.copy()
-    st.session_state.has_run = True
+    st.session_state.run_params = {
+        "benchmark_symbol": pending_benchmark_symbol,
+        "default_start_date": pending_default_start_date,
+        "initial_capital": float(pending_initial_capital),
+        "risk_free_rate": float(pending_risk_free_rate),
+        "min_observations": int(pending_min_observations),
+        "rolling_window": int(pending_rolling_window),
+        "use_log_returns": bool(pending_use_log_returns),
+        "allow_short": bool(pending_allow_short),
+        "selected_universe": pending_selected_universe,
+        "expected_return_method": pending_expected_return_method,
+        "covariance_method": pending_covariance_method,
+        "correlation_method": pending_correlation_method,
+        "bl_enabled": bool(pending_bl_enabled),
+        "selected_family": pending_selected_family,
+        "minimum_severity_threshold": float(pending_minimum_severity_threshold),
+        "quick_view": pending_quick_view,
+    }
     st.session_state.engine_result = None
     st.session_state.engine_error = None
+    st.session_state.run_counter += 1
 
-if not st.session_state.has_run:
+
+# =========================================================
+# NO RUN YET
+# =========================================================
+if st.session_state.run_params is None:
     st.info("Choose your settings in the sidebar, then click **Run Professional Analytics**.")
     st.stop()
 
-run_params = st.session_state.last_run_params
+
+run_params = st.session_state.run_params
 
 
+# =========================================================
+# RUN ENGINE ONLY AFTER BUTTON CLICK
+# =========================================================
 if st.session_state.engine_result is None and st.session_state.engine_error is None:
     with st.spinner("Downloading data and running portfolio analytics..."):
         try:
@@ -378,7 +478,6 @@ if st.session_state.engine_result is None and st.session_state.engine_error is N
                 "benchmark_symbol": run_params["benchmark_symbol"],
                 "benchmark": run_params["benchmark_symbol"],
                 "default_start_date": run_params["default_start_date"],
-                "start_date": run_params["default_start_date"],
                 "initial_capital": run_params["initial_capital"],
                 "risk_free_rate": run_params["risk_free_rate"],
                 "min_observations": run_params["min_observations"],
@@ -408,25 +507,28 @@ if st.session_state.engine_result is None and st.session_state.engine_error is N
             )
 
             engine.run()
+
             st.session_state.engine_result = engine
             st.session_state.engine_error = None
 
         except Exception as exc:
-            st.session_state.engine_result = None
             st.session_state.engine_error = f"{exc}\n\n{traceback.format_exc()}"
 
 
 engine = st.session_state.engine_result
 engine_error = st.session_state.engine_error
 
+
+# =========================================================
+# ERROR HANDLING
+# =========================================================
 if engine_error:
     st.error("Application error")
     st.code(engine_error)
-    lowered = engine_error.lower()
 
+    lowered = engine_error.lower()
     if "rate limit" in lowered or "too many requests" in lowered:
         st.warning("Yahoo Finance appears to be throttling requests. Wait briefly and rerun with a smaller universe.")
-
     if "does not contain enough assets" in lowered:
         st.warning("The selected universe is invalid. Please verify that the universe contains at least two valid tickers.")
 
@@ -437,6 +539,9 @@ if engine is None:
     st.stop()
 
 
+# =========================================================
+# DIAGNOSTICS
+# =========================================================
 diag = engine.diagnostics.summary() if hasattr(engine, "diagnostics") else {}
 
 if isinstance(diag, dict) and diag.get("warnings"):
@@ -450,6 +555,9 @@ if isinstance(diag, dict) and diag.get("errors"):
             st.error(str(error_msg))
 
 
+# =========================================================
+# KPIS
+# =========================================================
 best_name = engine.best_strategy_name()
 best_metrics = engine.metrics.get(best_name, {})
 
@@ -468,6 +576,9 @@ with k6:
     render_kpi_card("Final Portfolio Value", fmt_usd(best_metrics.get("final_portfolio_value")), "Based on initial capital")
 
 
+# =========================================================
+# TABS
+# =========================================================
 tabs = st.tabs([
     "Overview",
     "Info Hub",
@@ -551,7 +662,7 @@ with tab_overview:
 
 with tab_info_hub:
     st.subheader("Investment Universe Identity Map")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     info_hub_chart = charts.get("info_hub")
     if info_hub_chart is not None:
         show_plotly(info_hub_chart)
@@ -565,7 +676,7 @@ with tab_info_hub:
 
 with tab_dashboard:
     st.subheader("Executive Strategy Dashboard")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     dashboard_chart = charts.get("dashboard")
     radar_chart = charts.get("radar")
 
@@ -581,7 +692,7 @@ with tab_dashboard:
 
 with tab_optimization:
     st.subheader("Portfolio Optimization")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     opt_chart = charts.get("optimization")
     if opt_chart is not None:
         show_plotly(opt_chart)
@@ -593,7 +704,7 @@ with tab_optimization:
 
 with tab_relative:
     st.subheader("Benchmark-Relative Frontier")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     rel_chart = charts.get("relative_frontier")
     if rel_chart is not None:
         show_plotly(rel_chart)
@@ -601,7 +712,7 @@ with tab_relative:
 
 with tab_te:
     st.subheader("Tracking Error")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     te_chart = charts.get("tracking_error")
     benchmark_vs_te = charts.get("benchmark_vs_te")
 
@@ -613,7 +724,7 @@ with tab_te:
 
 with tab_stress:
     st.subheader("Stress Testing")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     stress_chart = charts.get("stress")
     if stress_chart is not None:
         show_plotly(stress_chart)
@@ -628,7 +739,7 @@ with tab_stress:
 
 with tab_risk:
     st.subheader("Risk Analytics")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     abs_var_chart = charts.get("absolute_var")
     rel_var_chart = charts.get("relative_var")
     risk_contrib_chart = charts.get("risk_contrib")
@@ -654,7 +765,7 @@ with tab_risk:
 
 with tab_beta:
     st.subheader("Rolling Beta")
-    charts = getattr(engine, "charts", {}) if isinstance(getattr(engine, "charts", {}), dict) else {}
+    charts = get_chart_dict(engine)
     rolling_beta_chart = charts.get("rolling_beta")
     if rolling_beta_chart is not None:
         show_plotly(rolling_beta_chart)
@@ -670,7 +781,7 @@ with tab_beta:
 
 with tab_finquant:
     st.subheader("FinQuant")
-    fq = getattr(engine, "finquant_charts", {}) if isinstance(getattr(engine, "finquant_charts", {}), dict) else {}
+    fq = get_finquant_chart_dict(engine)
     fq_chart = fq.get("ef_chart")
     fq_min_tbl = fq.get("min_vol_table")
     fq_max_tbl = fq.get("max_sharpe_table")
@@ -716,26 +827,6 @@ Represents the second independent driver of returns. This may reflect interest r
 
 **PC3**  
 Represents a third independent source of movement, which may capture more specific themes such as commodities, inflation, or defensive behavior.
-
-### Factor Loadings
-
-The values in the PCA table are factor loadings:
-
-- Large positive values: strong positive relationship with the factor
-- Large negative values: inverse relationship
-- Values near zero: weak relationship
-
-### Explained Variance
-
-If one principal component explains most of the variance, the portfolio may look diversified on paper while still being dominated by a single hidden risk factor.
-
-### Summary
-
-PCA transforms complex portfolio behavior into a smaller set of common risk drivers and helps users understand:
-
-- true diversification,
-- hidden concentration,
-- structural portfolio exposure.
 """)
 
     st.info("Key Insight: if PC1 explains most of the variance, your portfolio may appear diversified but is actually driven by one dominant factor.")
@@ -760,9 +851,11 @@ with tab_data:
     if data_obj is not None:
         asset_metadata = safe_df(getattr(data_obj, "asset_metadata", pd.DataFrame()))
         data_quality = safe_df(getattr(data_obj, "data_quality", pd.DataFrame()))
+
         if not asset_metadata.empty:
             st.markdown("**Asset Metadata**")
             st.dataframe(asset_metadata, use_container_width=True)
+
         if not data_quality.empty:
             st.markdown("**Data Quality**")
             st.dataframe(data_quality, use_container_width=True)
