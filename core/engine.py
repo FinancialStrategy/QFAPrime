@@ -9,7 +9,7 @@ from scipy.optimize import minimize
 from sklearn.decomposition import PCA
 
 from core.data_loader import compute_returns, load_price_data
-from core.universes import UNIVERSE_REGISTRY
+from core.universes import UNIVERSE_REGISTRY, get_universe_tickers
 
 
 # =========================================================
@@ -41,21 +41,14 @@ class Diagnostics:
 # =========================================================
 # Helpers
 # =========================================================
-def _to_float(x: Any, default: float = np.nan) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-
 def _annualization_factor() -> int:
     return 252
 
 
 def _safe_div(a: float, b: float, default: float = np.nan) -> float:
-    if b is None or np.isnan(b) or abs(b) < 1e-12:
+    if b is None or pd.isna(b) or abs(float(b)) < 1e-12:
         return default
-    return a / b
+    return float(a) / float(b)
 
 
 def _validate_input_frame(name: str, df: pd.DataFrame) -> None:
@@ -67,19 +60,12 @@ def _validate_input_frame(name: str, df: pd.DataFrame) -> None:
         raise ValueError(f"{name} does not contain enough observations (need at least 30 rows).")
 
 
-def _clip_weights(weights: np.ndarray, allow_short: bool) -> np.ndarray:
-    w = np.asarray(weights, dtype=float)
-    if allow_short:
-        return w
-    return np.clip(w, 0.0, None)
-
-
 def _normalize_weights(weights: np.ndarray) -> np.ndarray:
     w = np.asarray(weights, dtype=float)
-    s = np.sum(w)
-    if abs(s) < 1e-12:
+    total = np.sum(w)
+    if abs(total) < 1e-12:
         return np.repeat(1.0 / len(w), len(w))
-    return w / s
+    return w / total
 
 
 def _portfolio_returns(returns: pd.DataFrame, weights: np.ndarray) -> pd.Series:
@@ -89,8 +75,7 @@ def _portfolio_returns(returns: pd.DataFrame, weights: np.ndarray) -> pd.Series:
 def _drawdown_series(return_series: pd.Series) -> pd.Series:
     wealth = (1.0 + return_series.fillna(0.0)).cumprod()
     peak = wealth.cummax()
-    dd = wealth / peak - 1.0
-    return dd
+    return wealth / peak - 1.0
 
 
 def _max_drawdown(return_series: pd.Series) -> float:
@@ -140,10 +125,10 @@ def _information_ratio(active_returns: pd.Series) -> float:
     s = active_returns.dropna()
     if s.empty:
         return np.nan
-    te = s.std(ddof=1)
-    if te <= 0 or np.isnan(te):
+    te_daily = s.std(ddof=1)
+    if te_daily <= 0 or pd.isna(te_daily):
         return np.nan
-    return float((s.mean() / te) * np.sqrt(_annualization_factor()))
+    return float((s.mean() / te_daily) * np.sqrt(_annualization_factor()))
 
 
 def _beta_alpha(portfolio_returns: pd.Series, benchmark_returns: pd.Series, risk_free_rate: float) -> Tuple[float, float]:
@@ -155,7 +140,7 @@ def _beta_alpha(portfolio_returns: pd.Series, benchmark_returns: pd.Series, risk
     rb = df.iloc[:, 1]
 
     var_b = np.var(rb, ddof=1)
-    if var_b <= 0 or np.isnan(var_b):
+    if var_b <= 0 or pd.isna(var_b):
         return np.nan, np.nan
 
     beta = np.cov(rp, rb, ddof=1)[0, 1] / var_b
@@ -204,16 +189,14 @@ def _compute_performance_metrics(
     active = aligned.iloc[:, 0] - aligned.iloc[:, 1] if not aligned.empty else pd.Series(dtype=float)
 
     beta, alpha = _beta_alpha(pr, br, risk_free_rate) if not br.empty else (np.nan, np.nan)
-
     te = _tracking_error(active) if not active.empty else np.nan
     ir = _information_ratio(active) if not active.empty else np.nan
 
-    final_portfolio_value = initial_capital * (1.0 + total_return)
-
+    final_portfolio_value = float(initial_capital) * (1.0 + total_return)
     win_rate = float((pr > 0).mean()) if not pr.empty else np.nan
     profit_factor = _profit_factor(pr)
 
-    out = {
+    return {
         "portfolio_returns": pr,
         "benchmark_returns": br,
         "drawdown_series": dd_series,
@@ -240,7 +223,6 @@ def _compute_performance_metrics(
         "VaR_99": _historical_var(pr, 0.01),
         "CVaR_99": _historical_cvar(pr, 0.01),
     }
-    return out
 
 
 def _equal_weight(n_assets: int) -> np.ndarray:
@@ -269,8 +251,7 @@ def _min_variance_weights(cov: pd.DataFrame, allow_short: bool) -> np.ndarray:
     if not res.success:
         return x0
 
-    w = _normalize_weights(_clip_weights(res.x, allow_short))
-    return w
+    return _normalize_weights(np.asarray(res.x, dtype=float))
 
 
 def _max_sharpe_weights(mu: pd.Series, cov: pd.DataFrame, risk_free_rate: float, allow_short: bool) -> np.ndarray:
@@ -279,7 +260,8 @@ def _max_sharpe_weights(mu: pd.Series, cov: pd.DataFrame, risk_free_rate: float,
 
     def objective(w: np.ndarray) -> float:
         port_ret = float(np.dot(w, mu.values))
-        port_vol = float(np.sqrt(max(w.T @ cov.values @ w, 1e-16)))
+        port_var = float(w.T @ cov.values @ w)
+        port_vol = float(np.sqrt(max(port_var, 1e-16)))
         sharpe = (port_ret - risk_free_rate) / port_vol
         return -sharpe
 
@@ -298,8 +280,7 @@ def _max_sharpe_weights(mu: pd.Series, cov: pd.DataFrame, risk_free_rate: float,
     if not res.success:
         return x0
 
-    w = _normalize_weights(_clip_weights(res.x, allow_short))
-    return w
+    return _normalize_weights(np.asarray(res.x, dtype=float))
 
 
 def _build_stress_table(
@@ -318,24 +299,24 @@ def _build_stress_table(
         {"scenario_name": "Sharp Selloff", "family": "Sharp_Selloff", "shock": -0.12},
     ]
 
-    rows = []
     base_port = float(portfolio_returns.mean()) if not portfolio_returns.empty else np.nan
     base_bench = float(benchmark_returns.mean()) if not benchmark_returns.empty else np.nan
 
+    rows = []
     for s in scenarios:
-        pr = base_port + s["shock"]
-        br = base_bench + 0.85 * s["shock"] if pd.notna(base_bench) else np.nan
-        rel = pr - br if pd.notna(br) else np.nan
-        sev = abs(s["shock"])
+        portfolio_return = base_port + s["shock"]
+        benchmark_return = base_bench + 0.85 * s["shock"] if pd.notna(base_bench) else np.nan
+        relative_return = portfolio_return - benchmark_return if pd.notna(benchmark_return) else np.nan
+        severity_score = abs(s["shock"])
 
         rows.append(
             {
                 "scenario_name": s["scenario_name"],
                 "family": s["family"],
-                "portfolio_return": pr,
-                "benchmark_return": br,
-                "relative_return": rel,
-                "severity_score": sev,
+                "portfolio_return": portfolio_return,
+                "benchmark_return": benchmark_return,
+                "relative_return": relative_return,
+                "severity_score": severity_score,
             }
         )
 
@@ -369,26 +350,29 @@ def _build_factor_pca_df(returns: pd.DataFrame) -> pd.DataFrame:
     if clean.shape[0] < 20:
         return pd.DataFrame()
 
-    pca = PCA(n_components=min(3, clean.shape[1]))
+    n_components = min(3, clean.shape[1])
+    pca = PCA(n_components=n_components)
     pca.fit(clean.values)
 
     loading_df = pd.DataFrame(
         pca.components_.T,
         index=clean.columns,
-        columns=[f"PC{i+1}" for i in range(pca.n_components_)],
-    )
-    explained = pd.Series(
-        pca.explained_variance_ratio_,
-        index=[f"PC{i+1}" for i in range(pca.n_components_)],
-        name="explained_variance_ratio",
+        columns=[f"PC{i+1}" for i in range(n_components)],
     )
 
-    out = loading_df.copy()
-    for idx, val in explained.items():
-        out.loc[f"{idx}_explained", :] = np.nan
-        out.loc[f"{idx}_explained", idx] = val
+    explained_df = pd.DataFrame(
+        {
+            "factor_or_asset": [f"PC{i+1}_explained" for i in range(n_components)],
+            **{
+                f"PC{i+1}": [pca.explained_variance_ratio_[i] if j == i else np.nan for j in range(n_components)]
+                for i in range(n_components)
+            },
+        }
+    )
 
-    return out.reset_index().rename(columns={"index": "factor_or_asset"})
+    out = loading_df.reset_index().rename(columns={"index": "factor_or_asset"})
+    out = pd.concat([out, explained_df], ignore_index=True)
+    return out
 
 
 # =========================================================
@@ -422,7 +406,7 @@ class ProfessionalPortfolioEngine:
         self.factor_pca_df: pd.DataFrame = pd.DataFrame()
 
     # -----------------------------------------------------
-    # Universe
+    # Universe resolution
     # -----------------------------------------------------
     def _resolve_universe(self) -> List[str]:
         selected_universe = getattr(self.config, "selected_universe", None)
@@ -430,39 +414,28 @@ class ProfessionalPortfolioEngine:
         if selected_universe not in UNIVERSE_REGISTRY:
             raise ValueError(f"Selected universe '{selected_universe}' was not found in UNIVERSE_REGISTRY.")
 
-        raw = UNIVERSE_REGISTRY[selected_universe]
-
-        if isinstance(raw, dict):
-            tickers = []
-            for _, vals in raw.items():
-                if isinstance(vals, (list, tuple)):
-                    tickers.extend(list(vals))
-            tickers = [str(x).strip().upper() for x in tickers if str(x).strip()]
-        elif isinstance(raw, (list, tuple)):
-            tickers = [str(x).strip().upper() for x in raw if str(x).strip()]
-        else:
-            raise ValueError("Universe registry entry must be a list, tuple, or dict of ticker lists.")
-
-        tickers = list(dict.fromkeys(tickers))
+        tickers = get_universe_tickers(selected_universe)
 
         if len(tickers) < 2:
-            raise ValueError("Selected universe does not contain enough assets.")
+            raise ValueError(
+                f"Selected universe '{selected_universe}' does not contain enough assets. "
+                f"Resolved tickers: {tickers}"
+            )
 
         return tickers
 
     # -----------------------------------------------------
-    # Data
+    # Data loading
     # -----------------------------------------------------
     def _load_market_data(self) -> None:
         self.universe = self._resolve_universe()
-
         start = str(getattr(self.config, "default_start_date", "2019-01-01"))
+        end = pd.Timestamp.today().strftime("%Y-%m-%d")
 
-        # Portfolio universe
         prices, meta = load_price_data(
             tickers=self.universe,
             start=start,
-            end=pd.Timestamp.today().strftime("%Y-%m-%d"),
+            end=end,
             auto_adjust=False,
             batch_size=3,
         )
@@ -481,19 +454,17 @@ class ProfessionalPortfolioEngine:
         self.prices = prices.copy()
         self.returns = compute_returns(self.prices)
 
-        # Benchmark
         bpx, bmeta = load_price_data(
             tickers=[self.benchmark_symbol],
             start=start,
-            end=pd.Timestamp.today().strftime("%Y-%m-%d"),
+            end=end,
             auto_adjust=False,
             batch_size=1,
         )
 
         if bmeta.get("failed"):
             self.diagnostics.add_warning(
-                f"Benchmark download issue for {self.benchmark_symbol}: "
-                + ", ".join(bmeta["failed"])
+                f"Benchmark download issue for {self.benchmark_symbol}: " + ", ".join(bmeta["failed"])
             )
 
         if bpx is None or bpx.empty or self.benchmark_symbol not in bpx.columns:
@@ -505,7 +476,11 @@ class ProfessionalPortfolioEngine:
             self.benchmark_returns = pd.Series(dtype=float)
         else:
             self.benchmark_prices = bpx[[self.benchmark_symbol]].copy()
-            self.benchmark_returns = compute_returns(self.benchmark_prices).iloc[:, 0]
+            benchmark_returns_df = compute_returns(self.benchmark_prices)
+            if benchmark_returns_df.empty:
+                self.benchmark_returns = pd.Series(dtype=float)
+            else:
+                self.benchmark_returns = benchmark_returns_df.iloc[:, 0]
 
         _validate_input_frame("Price data", self.prices)
         _validate_input_frame("Return matrix", self.returns)
@@ -517,7 +492,6 @@ class ProfessionalPortfolioEngine:
                 f"observations of {min_obs}."
             )
 
-        # Align benchmark to portfolio dates if available
         if not self.benchmark_returns.empty:
             aligned = pd.concat(
                 [self.returns, self.benchmark_returns.rename("benchmark")],
@@ -536,14 +510,13 @@ class ProfessionalPortfolioEngine:
                 self.benchmark_returns = aligned["benchmark"]
 
     # -----------------------------------------------------
-    # Weights / strategies
+    # Inputs
     # -----------------------------------------------------
     def _estimate_inputs(self) -> Tuple[pd.Series, pd.DataFrame]:
         ann = _annualization_factor()
         mu = self.returns.mean() * ann
         cov = self.returns.cov() * ann
 
-        # basic PSD fix
         cov_values = cov.values
         eigvals, eigvecs = np.linalg.eigh(cov_values)
         eigvals = np.clip(eigvals, 1e-10, None)
@@ -556,18 +529,19 @@ class ProfessionalPortfolioEngine:
         allow_short = bool(getattr(self.config, "allow_short", False))
         rf = float(getattr(self.config, "risk_free_rate", 0.03))
 
-        strategies = {
+        strategies: Dict[str, np.ndarray] = {
             "equal_weight": _equal_weight(len(mu)),
             "min_variance": _min_variance_weights(cov, allow_short=allow_short),
             "max_sharpe": _max_sharpe_weights(mu, cov, risk_free_rate=rf, allow_short=allow_short),
         }
 
-        # optional lightweight BL proxy
         if self.bl_controls.get("enabled", False):
-            mu_bl = mu.copy()
-            mu_bl = 0.5 * mu_bl + 0.5 * mu_bl.mean()
+            mu_bl = 0.5 * mu + 0.5 * mu.mean()
             strategies["black_litterman_proxy"] = _max_sharpe_weights(
-                mu_bl, cov, risk_free_rate=rf, allow_short=allow_short
+                mu_bl,
+                cov,
+                risk_free_rate=rf,
+                allow_short=allow_short,
             )
 
         return strategies
@@ -591,8 +565,8 @@ class ProfessionalPortfolioEngine:
         if benchmark_returns.empty:
             benchmark_returns = pd.Series(index=self.returns.index, data=np.nan)
 
-        strategy_rows = []
-        metric_rows = []
+        metric_rows: List[Dict[str, Any]] = []
+        strategy_rows: List[Dict[str, Any]] = []
 
         for strategy_name, weights in strategy_weights.items():
             pr = _portfolio_returns(self.returns, weights)
@@ -617,34 +591,36 @@ class ProfessionalPortfolioEngine:
 
             self.metrics[strategy_name] = metrics
 
-            metric_row = {
-                "strategy": strategy_name,
-                "annual_return": metrics.get("annual_return"),
-                "annual_return_benchmark": metrics.get("annual_return_benchmark"),
-                "volatility": metrics.get("volatility"),
-                "sharpe_ratio": metrics.get("sharpe_ratio"),
-                "sortino_ratio": metrics.get("sortino_ratio"),
-                "calmar_ratio": metrics.get("calmar_ratio"),
-                "max_drawdown": metrics.get("max_drawdown"),
-                "alpha": metrics.get("alpha"),
-                "beta": metrics.get("beta"),
-                "tracking_error": metrics.get("tracking_error"),
-                "information_ratio": metrics.get("information_ratio"),
-                "win_rate": metrics.get("win_rate"),
-                "profit_factor": metrics.get("profit_factor"),
-                "total_return_pct": metrics.get("total_return_pct"),
-                "total_return_benchmark_pct": metrics.get("total_return_benchmark_pct"),
-                "excess_return_vs_benchmark_pct": metrics.get("excess_return_vs_benchmark_pct"),
-                "VaR_95": metrics.get("VaR_95"),
-                "CVaR_95": metrics.get("CVaR_95"),
-                "VaR_99": metrics.get("VaR_99"),
-                "CVaR_99": metrics.get("CVaR_99"),
-                "final_portfolio_value": metrics.get("final_portfolio_value"),
-            }
-            metric_rows.append(metric_row)
+            metric_rows.append(
+                {
+                    "strategy": strategy_name,
+                    "annual_return": metrics.get("annual_return"),
+                    "annual_return_benchmark": metrics.get("annual_return_benchmark"),
+                    "volatility": metrics.get("volatility"),
+                    "sharpe_ratio": metrics.get("sharpe_ratio"),
+                    "sortino_ratio": metrics.get("sortino_ratio"),
+                    "calmar_ratio": metrics.get("calmar_ratio"),
+                    "max_drawdown": metrics.get("max_drawdown"),
+                    "alpha": metrics.get("alpha"),
+                    "beta": metrics.get("beta"),
+                    "tracking_error": metrics.get("tracking_error"),
+                    "information_ratio": metrics.get("information_ratio"),
+                    "win_rate": metrics.get("win_rate"),
+                    "profit_factor": metrics.get("profit_factor"),
+                    "total_return_pct": metrics.get("total_return_pct"),
+                    "total_return_benchmark_pct": metrics.get("total_return_benchmark_pct"),
+                    "excess_return_vs_benchmark_pct": metrics.get("excess_return_vs_benchmark_pct"),
+                    "VaR_95": metrics.get("VaR_95"),
+                    "CVaR_95": metrics.get("CVaR_95"),
+                    "VaR_99": metrics.get("VaR_99"),
+                    "CVaR_99": metrics.get("CVaR_99"),
+                    "final_portfolio_value": metrics.get("final_portfolio_value"),
+                }
+            )
 
             weights_s = pd.Series(weights, index=self.returns.columns)
             top_weights = weights_s.sort_values(ascending=False).head(5)
+
             strategy_rows.append(
                 {
                     "strategy": strategy_name,
@@ -667,26 +643,31 @@ class ProfessionalPortfolioEngine:
             self.diagnostics.add_warning("Factor PCA is limited because the universe contains fewer than 3 assets.")
 
         if self.benchmark_returns.empty:
-            self.diagnostics.add_warning("Benchmark-relative metrics are partially unavailable because benchmark data is missing.")
+            self.diagnostics.add_warning(
+                "Benchmark-relative metrics are partially unavailable because benchmark data is missing."
+            )
 
-        self.diagnostics.add_info(f"Loaded {self.prices.shape[1]} assets and {self.prices.shape[0]} price observations.")
-        self.diagnostics.add_info(f"Generated {len(self.metrics)} portfolio strategies.")
+        self.diagnostics.add_info(
+            f"Loaded {self.prices.shape[1]} assets and {self.prices.shape[0]} price observations."
+        )
+        self.diagnostics.add_info(
+            f"Generated {len(self.metrics)} portfolio strategies."
+        )
 
         return self
 
     # -----------------------------------------------------
-    # Public helpers
+    # Public helper
     # -----------------------------------------------------
     def best_strategy_name(self) -> str:
         if self.metrics_df is None or self.metrics_df.empty:
             raise ValueError("Strategy metrics are not available.")
 
-        sharpe_col = "sharpe_ratio"
-        if sharpe_col not in self.metrics_df.columns:
-            return self.metrics_df.index[0]
+        if "sharpe_ratio" not in self.metrics_df.columns:
+            return str(self.metrics_df.index[0])
 
-        ranked = self.metrics_df[sharpe_col].replace([np.inf, -np.inf], np.nan).dropna()
+        ranked = self.metrics_df["sharpe_ratio"].replace([np.inf, -np.inf], np.nan).dropna()
         if ranked.empty:
-            return self.metrics_df.index[0]
+            return str(self.metrics_df.index[0])
 
         return str(ranked.idxmax())
