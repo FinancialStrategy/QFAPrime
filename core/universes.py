@@ -4,34 +4,68 @@ from typing import Dict, List
 
 UNIVERSE_REGISTRY: Dict[str, List[str]] = {
     "institutional_multi_asset": [
-        "SPY", "QQQ", "GLD", "TLT", "IEF", "DBC", "VNQ"
+        # US Equity Core
+        "SPY", "QQQ", "IWM", "DIA", "VTI",
+
+        # International Equities
+        "VEA", "VWO", "EWJ", "EWU", "EEM",
+
+        # Fixed Income
+        "TLT", "IEF", "BND", "LQD", "TIP", "HYG",
+
+        # Real Assets / Alternatives
+        "GLD", "SLV", "DBC", "VNQ", "XLE",
+
+        # Defensive / Style / Sector Spread
+        "XLV", "XLF", "XLI", "XLP", "XLK"
     ],
+
     "global_equities": [
-        "SPY", "VEA", "VWO", "EWJ", "EWU"
+        "SPY", "QQQ", "VTI", "VEA", "VWO", "EWJ", "EWU", "EEM", "DIA", "IWM"
     ],
+
     "defensive_allocation": [
-        "TLT", "IEF", "GLD", "TIP", "VNQ"
+        "TLT", "IEF", "BND", "TIP", "LQD", "GLD", "VNQ", "XLP", "XLV"
     ],
+
     "inflation_hedge": [
-        "GLD", "DBC", "TIP", "XLE"
+        "GLD", "SLV", "DBC", "TIP", "XLE", "VNQ"
     ],
+
     "growth_allocation": [
-        "QQQ", "SPY", "VUG", "SOXX"
+        "QQQ", "SPY", "VUG", "SOXX", "XLK", "IWM"
     ],
+
     "balanced_60_40_plus": [
-        "SPY", "IEF", "TLT", "GLD", "VNQ"
+        "SPY", "VTI", "IEF", "TLT", "BND", "GLD", "VNQ", "TIP"
     ],
+
     "major_indices_proxy": [
-        "SPY", "QQQ", "IWM", "DIA"
+        "SPY", "QQQ", "IWM", "DIA", "VEA", "VWO"
     ],
+
     "precious_metals": [
         "GLD", "SLV", "PPLT"
     ],
+
     "real_assets": [
-        "GLD", "DBC", "VNQ", "TIP"
+        "GLD", "DBC", "VNQ", "TIP", "XLE"
     ],
+
     "risk_on_risk_off": [
-        "QQQ", "SPY", "TLT", "GLD", "DBC"
+        "QQQ", "SPY", "IWM", "TLT", "IEF", "GLD", "DBC", "XLP"
+    ],
+
+    "sector_rotation": [
+        "XLK", "XLF", "XLV", "XLE", "XLI", "XLP", "XLY", "XLU"
+    ],
+
+    "institutional_broad_25": [
+        "SPY", "QQQ", "IWM", "DIA", "VTI",
+        "VEA", "VWO", "EWJ", "EWU", "EEM",
+        "TLT", "IEF", "BND", "LQD", "TIP",
+        "GLD", "SLV", "DBC", "VNQ", "XLE",
+        "XLK", "XLV", "XLF", "XLI", "XLP"
     ],
 }
 
